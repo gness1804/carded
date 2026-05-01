@@ -1,0 +1,28 @@
+# Carded - Production Dependencies
+# Generated from pyproject.toml
+# Note: baml-py must be pinned to an exact version.
+# BAML enforces an exact match between the runtime and the generator that
+# produced baml_client/ — >= will break in Docker/CI builds.
+
+# Web framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+jinja2>=3.1.4
+python-multipart>=0.0.9
+
+# Structured LLM extraction
+baml-py==0.218.0
+
+# Image processing (HEIC/HEIF support for iPhone photos)
+pillow>=10.3.0
+pillow-heif>=0.16.0
+
+# Data validation
+pydantic>=2.7.0
+
+# API key encryption (session cookies) and download token signing
+cryptography>=41.0.0
+itsdangerous>=2.2.0
+
+# Environment variable loading
+python-dotenv>=1.0.0
