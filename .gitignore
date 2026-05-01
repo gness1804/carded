@@ -1,0 +1,112 @@
+# IDE and Editor Files
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.classpath
+.c9/
+*.sublime-workspace
+*.sublime-project
+.iml
+*.iml
+.eslintignore
+.prettierignore
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+*.iml
+*.ids
+*.orig
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt][a-z]
+Session.vim
+.netrwhist
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Node/npm
+node_modules/
+package-lock.json
+yarn.lock
+.npm
+.yarn
+dist/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.log
+
+# Go
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Ruby
+Gemfile.lock
+.bundle/
+vendor/
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+target/
+
+# Misc
+.env
+.env.local
+.env.*.local
+.cache/
+.tmp/
+tmp/
+temp/
+*.tmp
+.grepai/
