@@ -1,5 +1,7 @@
 # IDE and Editor Files
-.cursor/
+# Note: .cursor/ is intentionally NOT ignored. It is the CFS (Cursor File System)
+# docs directory in this workflow — plans, handoffs, interface contracts — and
+# belongs in version control.
 .vscode/
 .idea/
 *.swp
