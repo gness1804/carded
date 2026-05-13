@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}Carded — Scan a Business Card{% endblock %}
+
+{% block content %}
+
+{#
+  Context variables expected from app.py:
+    has_session : bool        — true if a valid carded_session cookie is present
+    masked_key  : str | None  — e.g. "sk-ant-...wxyz"; None when has_session is false
+    is_owner    : bool        — true if the request comes from the site owner
+#}
+
+<!-- =========================================================
+     SECTION 1: API Key Entry
+     Shown when has_session is false; collapsed to an indicator
+     when has_session is true.
+     ========================================================= -->
+<section
+  class="card api-key-section{% if has_session %} api-key-section--set{% endif %}"
+  id="api-key-section"
+  aria-label="API key setup"
+>
+
+  {% if has_session %}
+  <!-- Collapsed indicator -->
+  <div class="key-indicator" id="key-indicator">
+    <span class="key-indicator__icon" aria-hidden="true">&#10003;</span>
+    <span class="key-indicator__label">Key set</span>
+    <span class="key-indicator__mask" id="key-mask">{{ masked_key }}</span>
+    <button
+      class="btn btn--ghost btn--sm"
+      id="change-key-btn"
+      type="button"
+      aria-label="Change API key"
+    >Change</button>
+  </div>
+  {% endif %}
+
+  <!-- Full key-entry form (visible when no session; toggled by JS when "Change" is clicked) -->
+  <div
+    class="key-entry{% if has_session %} key-entry--hidden{% endif %}"
+    id="key-entry"
+  >
+    <h2 class="key-entry__heading">Enter your Anthropic API key</h2>
+    <p class="key-entry__hint">
+      Your key is encrypted and stored in a session cookie. It never leaves your browser in plaintext.
+    </p>
+    <div class="key-error key-error--hidden" id="key-error" role="alert" aria-live="polite"></div>
+    <form class="key-form" id="key-form" novalidate>
+      <div class="key-form__row">
+        <label for="api-key-input" class="sr-only">Anthropic API key</label>
+        <input
+          type="password"
+          id="api-key-input"
+          name="api_key"
+          class="input key-form__input"
+          placeholder="sk-ant-api03-..."
+          autocomplete="off"
+          spellcheck="false"
+          aria-describedby="key-error"
+          required
+        >
+        <button
+          type="submit"
+          class="btn btn--primary"
+          id="save-key-btn"
+        >Save key</button>
+      </div>
+    </form>
+  </div>
+
+</section>
+
+<!-- =========================================================
+     SECTION 2: Upload form
+     Hidden when has_session is false (JS shows it after key is saved).
+     ========================================================= -->
+<section
+  class="card upload-section{% if not has_session %} upload-section--hidden{% endif %}"
+  id="upload-section"
+  aria-label="Upload a business card"
+>
+  <h2 class="upload-section__heading">Scan a business card</h2>
+
+  <!-- Error area (populated by JS on failure) -->
+  <div class="error-card error-card--hidden" id="error-card" role="alert" aria-live="polite">
+    <p class="error-card__message" id="error-message"></p>
+    <p class="error-card__detail" id="error-detail"></p>
+  </div>
+
+  <!-- Upload form -->
+  <form
+    class="upload-form"
+    id="upload-form"
+    novalidate
+    enctype="multipart/form-data"
+  >
+    <div class="file-drop-zone" id="file-drop-zone">
+      <label for="file-input" class="file-drop-zone__label">
+        <span class="file-drop-zone__icon" aria-hidden="true">
+          <!-- Card-corner SVG icon -->
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+            <rect x="4" y="10" width="32" height="20" rx="3" stroke="currentColor" stroke-width="2" fill="none"/>
+            <line x1="4" y1="17" x2="36" y2="17" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </span>
+        <span class="file-drop-zone__primary">Tap to take a photo or choose a file</span>
+        <span class="file-drop-zone__secondary">JPEG, PNG, WebP, or HEIC &mdash; max 10 MB</span>
+      </label>
+      <input
+        type="file"
+        id="file-input"
+        name="file"
+        class="file-drop-zone__input"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
+        capture="environment"
+        aria-label="Business card image"
+      >
+    </div>
+
+    <!-- Image preview -->
+    <div class="preview-area preview-area--hidden" id="preview-area">
+      <img
+        id="preview-img"
+        class="preview-area__img"
+        src=""
+        alt="Preview of selected business card"
+      >
+      <button
+        type="button"
+        class="btn btn--ghost btn--sm preview-area__clear"
+        id="clear-file-btn"
+        aria-label="Remove selected image"
+      >&#x2715; Remove</button>
+    </div>
+
+    <button
+      type="submit"
+      class="btn btn--primary btn--full upload-form__submit"
+      id="submit-btn"
+      disabled
+    >
+      <span id="submit-label">Extract card</span>
+      <span class="spinner spinner--hidden" id="submit-spinner" aria-hidden="true"></span>
+    </button>
+  </form>
+</section>
+
+<!-- =========================================================
+     SECTION 3: Result area
+     Hidden until a successful /process response arrives.
+     ========================================================= -->
+<section
+  class="result-section result-section--hidden"
+  id="result-section"
+  aria-label="Extracted card data"
+  aria-live="polite"
+>
+  <h2 class="result-section__heading">Contact extracted</h2>
+
+  <!-- Card data rendered by JS (app.js renderCard) -->
+  <div class="result-card" id="result-card"></div>
+
+  <!-- Download actions -->
+  <div class="download-actions" id="download-actions">
+    <a
+      href="#"
+      class="btn btn--primary btn--download"
+      id="vcf-link"
+      download
+    >Download .vcf</a>
+    <a
+      href="#"
+      class="btn btn--secondary btn--download"
+      id="csv-link"
+      download
+    >Download .csv</a>
+  </div>
+</section>
+
+{% endblock %}
