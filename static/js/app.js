@@ -18,6 +18,16 @@
    ============================================================ */
 let refs = {};
 
+// The file currently chosen for upload. Tracked here (not just on the
+// file input) so drag-and-drop and the picker converge on a single source
+// of truth. Browsers restrict programmatic FileList assignment, so a
+// dropped file may not appear in fileInput.files in every browser.
+let selectedFile = null;
+
+// The most recent object URL passed to the preview <img>, kept so we can
+// revoke it before assigning a new one (avoids leaking blob references).
+let currentPreviewUrl = null;
+
 function initRefs() {
   refs = {
     // API key section
@@ -38,6 +48,7 @@ function initRefs() {
     fileDropZone:   document.getElementById('file-drop-zone'),
     previewArea:    document.getElementById('preview-area'),
     previewImg:     document.getElementById('preview-img'),
+    previewFilename: document.getElementById('preview-filename'),
     clearFileBtn:   document.getElementById('clear-file-btn'),
     errorCard:      document.getElementById('error-card'),
     errorMessage:   document.getElementById('error-message'),
@@ -65,7 +76,7 @@ function showLoading() {
 }
 
 function hideLoading() {
-  refs.submitBtn.disabled = refs.fileInput.files.length === 0;
+  refs.submitBtn.disabled = selectedFile === null;
   refs.submitLabel.textContent = 'Extract card';
   refs.submitSpinner.classList.add('spinner--hidden');
   refs.submitSpinner.setAttribute('aria-hidden', 'true');
@@ -75,21 +86,48 @@ function hideLoading() {
    Image preview
    ============================================================ */
 function previewImage(file) {
+  // Revoke the previous object URL before creating a new one (avoids
+  // accumulating blob references across selections).
+  if (currentPreviewUrl) {
+    URL.revokeObjectURL(currentPreviewUrl);
+    currentPreviewUrl = null;
+  }
+
   const objectUrl = URL.createObjectURL(file);
+  currentPreviewUrl = objectUrl;
+
+  // Reset to the "image visible" state. If the browser fails to render
+  // the file (HEIC in Chrome/Firefox, corrupted bytes), onerror flips
+  // the area to fallback mode so we never show a broken-image icon.
+  refs.previewArea.classList.remove('preview-area--no-image');
+  refs.previewFilename.textContent = file.name;
+
+  refs.previewImg.onerror = () => {
+    refs.previewArea.classList.add('preview-area--no-image');
+  };
+  refs.previewImg.onload = () => {
+    refs.previewArea.classList.remove('preview-area--no-image');
+  };
+
   refs.previewImg.src = objectUrl;
   refs.previewArea.classList.remove('preview-area--hidden');
-  // Revoke the previous object URL to avoid memory leaks
-  // (the browser holds the reference until we revoke or page unload)
-  refs.previewImg.onload = () => {
-    // onload fires each time src changes; revoke after paint
-    // We keep the URL alive until the next selection replaces it
-  };
 }
 
 function clearFile() {
+  selectedFile = null;
   refs.fileInput.value = '';
-  refs.previewImg.src = '';
+  if (currentPreviewUrl) {
+    URL.revokeObjectURL(currentPreviewUrl);
+    currentPreviewUrl = null;
+  }
+  // Detach handlers and use removeAttribute (rather than src='') so the
+  // browser does not attempt to load an empty resource.
+  refs.previewImg.onerror = null;
+  refs.previewImg.onload = null;
+  refs.previewImg.removeAttribute('src');
   refs.previewArea.classList.add('preview-area--hidden');
+  refs.previewArea.classList.remove('preview-area--no-image');
+  refs.previewFilename.textContent = '';
   refs.submitBtn.disabled = true;
   hideErrorCard();
 }
@@ -197,13 +235,11 @@ function maskKey(key) {
 }
 
 function revealKeyIndicator(key) {
-  // Update the mask text via .textContent (key is user-supplied input, not DOM)
-  if (refs.keyMask) {
-    refs.keyMask.textContent = maskKey(key);
-  }
-  if (refs.keyIndicator) {
-    refs.keyIndicator.style.display = '';
-  }
+  // The indicator block is always present in the DOM. Update its mask
+  // text via .textContent (user-supplied input, never DOM) and reveal it
+  // by removing the hidden modifier class.
+  refs.keyMask.textContent = maskKey(key);
+  refs.keyIndicator.classList.remove('key-indicator--hidden');
   refs.apiKeySection.classList.add('api-key-section--set');
   refs.keyEntry.classList.add('key-entry--hidden');
 }
@@ -218,6 +254,14 @@ function revealKeyIndicator(key) {
  * @param {File} file
  */
 async function submitCard(file) {
+  if (!file) {
+    renderError({
+      error: 'no_file',
+      message: 'Please choose a business card image before extracting.',
+    });
+    return;
+  }
+
   hideErrorCard();
   hideResultSection();
   showLoading();
@@ -241,6 +285,10 @@ async function submitCard(file) {
       refs.vcfLink.href = '/download/vcf?token=' + encodeURIComponent(token);
       refs.csvLink.href = '/download/csv?token=' + encodeURIComponent(token);
       showResultSection();
+      // Reset the upload form so the next scan starts from a clean state
+      // (no stale file, no lingering preview). The form itself stays
+      // visible so the user can scan another card if they want.
+      clearFile();
     } else if (resp.status === 401 && data && data.error === 'missing_api_key') {
       // Scroll back to key entry
       scrollToKeyEntry(data);
@@ -556,6 +604,7 @@ function initDragDrop() {
    ============================================================ */
 function handleFileSelected(file) {
   if (!file) return;
+  selectedFile = file;
   previewImage(file);
   refs.submitBtn.disabled = false;
   hideErrorCard();
@@ -574,13 +623,30 @@ function initEvents() {
     });
   }
 
-  // "Change" button collapses indicator and re-shows entry form
+  // "Change" button: clear the encrypted key on the server, then re-show
+  // the entry form. Mirrors Receipt Ranger UX — refreshing the page after
+  // clicking Change should also show the entry form (because the cookie
+  // is gone), not the previously-set indicator.
   if (refs.changeKeyBtn) {
-    refs.changeKeyBtn.addEventListener('click', function () {
+    refs.changeKeyBtn.addEventListener('click', async function () {
+      refs.changeKeyBtn.disabled = true;
+      try {
+        await fetch('/session/key', {
+          method: 'DELETE',
+          credentials: 'same-origin',
+        });
+      } catch (_err) {
+        // Even if the network call fails, fall through and reset the UI;
+        // the cookie may still be set, but the user can retry.
+      }
       refs.keyEntry.classList.remove('key-entry--hidden');
-      refs.keyIndicator.style.display = 'none';
+      refs.keyIndicator.classList.add('key-indicator--hidden');
       refs.apiKeySection.classList.remove('api-key-section--set');
       refs.apiKeyInput.value = '';
+      refs.uploadSection.classList.add('upload-section--hidden');
+      hideResultSection();
+      clearFile();
+      refs.changeKeyBtn.disabled = false;
       refs.apiKeyInput.focus();
     });
   }
@@ -598,12 +664,13 @@ function initEvents() {
     refs.clearFileBtn.addEventListener('click', clearFile);
   }
 
-  // Upload form submit
+  // Upload form submit. Uses the closure-tracked selectedFile so dropped
+  // files work the same as picked files. If somehow no file is set, the
+  // submitCard() guard renders a visible error instead of failing silently.
   if (refs.uploadForm) {
     refs.uploadForm.addEventListener('submit', function (e) {
       e.preventDefault();
-      const file = refs.fileInput.files[0];
-      if (file) submitCard(file);
+      submitCard(selectedFile);
     });
   }
 

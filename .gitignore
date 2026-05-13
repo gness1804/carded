@@ -120,3 +120,6 @@ output/
 # baml_client/ is intentionally NOT ignored.
 # It is auto-generated but treated as a tracked build artifact (mirrors Receipt Ranger).
 # Never edit baml_client/ by hand — run `baml-cli generate` to regenerate it.
+
+# Test cards to use in development and QA
+test-cards/

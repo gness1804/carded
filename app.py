@@ -245,6 +245,18 @@ async def set_session_key(submission: KeySubmission) -> Response:
     return response
 
 
+@app.delete("/session/key")
+async def clear_session_key() -> Response:
+    """Clear the carded_session cookie so the next request has no API key.
+
+    Mirrors Receipt Ranger's "Change Key" UX: the encrypted key is removed
+    from server-side state (the cookie) before the user enters a new one.
+    """
+    response = JSONResponse(status_code=200, content={"ok": True})
+    response.delete_cookie(key="carded_session", path="/")
+    return response
+
+
 @app.post("/process")
 async def process(request: Request, file: UploadFile) -> Response:
     """Process an uploaded business-card image.

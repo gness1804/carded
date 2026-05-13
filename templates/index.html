@@ -22,20 +22,22 @@
   aria-label="API key setup"
 >
 
-  {% if has_session %}
-  <!-- Collapsed indicator -->
-  <div class="key-indicator" id="key-indicator">
+  <!-- Collapsed indicator (always rendered; JS toggles visibility after save) -->
+  <div
+    class="key-indicator{% if not has_session %} key-indicator--hidden{% endif %}"
+    id="key-indicator"
+  >
     <span class="key-indicator__icon" aria-hidden="true">&#10003;</span>
     <span class="key-indicator__label">Key set</span>
-    <span class="key-indicator__mask" id="key-mask">{{ masked_key }}</span>
+    <span class="key-indicator__mask" id="key-mask">{{ masked_key or '' }}</span>
     <button
       class="btn btn--ghost btn--sm"
       id="change-key-btn"
       type="button"
       aria-label="Change API key"
+      title="Change your API key. This will erase the encrypted key stored on the server."
     >Change</button>
   </div>
-  {% endif %}
 
   <!-- Full key-entry form (visible when no session; toggled by JS when "Change" is clicked) -->
   <div
@@ -125,8 +127,17 @@
         id="preview-img"
         class="preview-area__img"
         src=""
-        alt="Preview of selected business card"
+        alt=""
       >
+      <!-- Fallback shown when the browser can't render the image inline
+           (e.g. HEIC in Chrome/Firefox). JS toggles preview-area--no-image. -->
+      <div class="preview-area__fallback" aria-hidden="true">
+        <svg width="32" height="32" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" focusable="false">
+          <rect x="4" y="10" width="32" height="20" rx="3" stroke="currentColor" stroke-width="2" fill="none"/>
+          <line x1="4" y1="17" x2="36" y2="17" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <p class="preview-area__filename" id="preview-filename"></p>
       <button
         type="button"
         class="btn btn--ghost btn--sm preview-area__clear"

@@ -140,6 +140,40 @@ class TestSetSessionKey:
 
 
 # ---------------------------------------------------------------------------
+# DELETE /session/key — clear the encrypted key cookie
+# ---------------------------------------------------------------------------
+
+
+class TestClearSessionKey:
+    def test_200_clears_cookie(self):
+        """DELETE /session/key returns 200 and instructs the browser to drop
+        the carded_session cookie. After clearing, /process should 401."""
+        fresh = TestClient(app_module.app, raise_server_exceptions=False)
+        # Set a key first.
+        fresh.post("/session/key", json={"api_key": _VALID_KEY})
+        assert "carded_session" in fresh.cookies
+
+        # Clear it.
+        resp = fresh.delete("/session/key")
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+        # The Set-Cookie header should expire the cookie.
+        set_cookie = resp.headers.get("set-cookie", "").lower()
+        assert "carded_session" in set_cookie
+        # httpx applies the expiry, so the client should now have no value.
+        assert fresh.cookies.get("carded_session") in (None, "")
+
+        # And /process now returns 401.
+        followup = fresh.post(
+            "/process",
+            files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
+        )
+        assert followup.status_code == 401
+        assert followup.json()["error"] == "missing_api_key"
+
+
+# ---------------------------------------------------------------------------
 # POST /process — authentication
 # ---------------------------------------------------------------------------
 
