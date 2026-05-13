@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: carded
+    env: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      # Secrets: set values in the Render dashboard — do not add them here.
+      - key: SESSION_SECRET
+        sync: false
+      - key: DOWNLOAD_TOKEN_SECRET
+        sync: false
+      - key: OWNER_ANTHROPIC_API_KEY
+        sync: false
+      # Non-secret runtime config with safe defaults.
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: MAX_FILE_SIZE_MB
+        value: "10"
+      - key: EXTRACTION_TIMEOUT_SECONDS
+        value: "60"
+      - key: DOWNLOAD_TOKEN_TTL_SECONDS
+        value: "900"

@@ -6,6 +6,11 @@
 
 # Web framework
 fastapi>=0.111.0
+# Pin Starlette < 1.0 — Starlette 1.0 removed the deprecated
+# TemplateResponse(name, context) signature that app.py uses. Lifting this
+# pin requires migrating templates.TemplateResponse(...) calls in app.py to
+# the new TemplateResponse(request=..., name=..., context=...) form.
+starlette>=0.40,<1.0
 uvicorn[standard]>=0.29.0
 jinja2>=3.1.4
 python-multipart>=0.0.9
