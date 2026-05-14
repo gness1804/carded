@@ -352,3 +352,54 @@ def test_minimal_card_empty_arrays():
 
     for slot in range(1, 3):
         assert row.get(f"Website {slot} - Value", "") == ""
+
+
+# ---------------------------------------------------------------------------
+# CSV / formula injection (L-3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("payload", ["=HYPERLINK(\"http://evil\")", "@SUM(1)", "-2+3", "+2+3", "\tcmd", "\rcmd"])
+def test_formula_injection_neutralized_in_note(payload: str):
+    """Note values that a spreadsheet would evaluate as a formula are
+    prefixed with a single quote in the exported CSV."""
+    card = {**ALL_NULL, "note": payload}
+    row = _parse(build_google_csv(card))
+    assert row["Notes"] == "'" + payload
+
+
+def test_formula_injection_neutralized_across_text_fields():
+    card = {
+        **ALL_NULL,
+        "full_name": "=cmd|'/c calc'!A1",
+        "organization": "@evil",
+        "title": "-1",
+    }
+    row = _parse(build_google_csv(card))
+    assert row["Name"].startswith("'=")
+    assert row["Organization 1 - Name"].startswith("'@")
+    assert row["Organization 1 - Title"].startswith("'-")
+
+
+def test_benign_values_not_prefixed():
+    """Ordinary contact data is never altered."""
+    row = _parse(build_google_csv(JAMIE_PARK))
+    assert row["Name"] == "Jamie Park"
+    assert row["Notes"] == "Pronouns: they/them"
+    assert not row["Name"].startswith("'")
+
+
+def test_international_phone_plus_prefix_preserved():
+    """A legitimate '+<country code>' phone number must NOT be quote-prefixed
+    — it would corrupt the number on import into Google Contacts."""
+    card = {**ALL_NULL, "phones": [{"number": "+1-415-555-0199", "type": "MOBILE"}]}
+    row = _parse(build_google_csv(card))
+    assert row["Phone 1 - Value"] == "+1-415-555-0199"
+
+
+def test_formula_phone_value_still_neutralized():
+    """A phone value that is actually a formula (=/@) is still neutralized;
+    only the leading '+' is exempted for phone columns."""
+    card = {**ALL_NULL, "phones": [{"number": "=2+2", "type": "WORK"}]}
+    row = _parse(build_google_csv(card))
+    assert row["Phone 1 - Value"] == "'=2+2"

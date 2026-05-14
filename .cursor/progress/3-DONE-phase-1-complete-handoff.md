@@ -153,3 +153,5 @@ Total remaining project budget after today: ~25–35% weekly all-models. Ends ar
 ---
 
 *End of handoff. Resume with the kickoff command above when ready.*
+
+<!-- DONE -->

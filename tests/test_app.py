@@ -71,6 +71,54 @@ def _make_valid_result(card_dict: dict | None = None) -> Valid:
     return Valid(card=mock_card)
 
 
+def _binding_for_cookie(cookie_value: str = "") -> str:
+    """Recompute the L3 download-token session binding for a cookie value.
+
+    Mirrors app._session_binding so tests can forge correctly-bound tokens
+    (e.g. a bound-but-unknown token to exercise the 404 path).
+    """
+    import hashlib
+    import hmac
+
+    return hmac.new(
+        app_module._DOWNLOAD_TOKEN_SECRET.encode(),
+        cookie_value.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _client_with_session(api_key: str = _VALID_KEY) -> TestClient:
+    """A fresh, isolated TestClient with a carded_session cookie set at the
+    client level.
+
+    The module-level ``client`` persists cookies across tests, which makes
+    per-request ``cookies=`` ambiguous (httpx merges them). For tests that
+    exercise the L3 session binding — where /process and /download must agree
+    on the exact cookie value — use an isolated client instead.
+    """
+    import session as session_module_helper
+
+    isolated = TestClient(app_module.app, raise_server_exceptions=False)
+    isolated.cookies.set(
+        "carded_session", session_module_helper.encrypt_api_key(api_key)
+    )
+    return isolated
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiters():
+    """Clear module-level rate-limiter state between tests.
+
+    The limiters are process-global; without this the suite's own request
+    volume would trip them and bleed 429s across unrelated tests.
+    """
+    app_module._session_key_limiter._hits.clear()
+    app_module._process_limiter._hits.clear()
+    yield
+    app_module._session_key_limiter._hits.clear()
+    app_module._process_limiter._hits.clear()
+
+
 # ---------------------------------------------------------------------------
 # GET / — index page
 # ---------------------------------------------------------------------------
@@ -373,27 +421,29 @@ class TestProcessHappyPath:
 
     def test_200_token_is_usable_for_vcf_download(self):
         result = _make_valid_result(JAMIE_PARK)
+        # Isolated client: /process and /download must share one cookie value
+        # for the L3 binding check to pass.
+        sess = _client_with_session()
         with patch.object(app_module, "extract_card_from_bytes", return_value=result):
-            process_resp = client.post(
+            process_resp = sess.post(
                 "/process",
                 files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
-                cookies=_session_cookie(),
             )
         token = process_resp.json()["token"]
-        vcf_resp = client.get(f"/download/vcf?token={token}")
+        vcf_resp = sess.get(f"/download/vcf?token={token}")
         assert vcf_resp.status_code == 200
         assert "text/vcard" in vcf_resp.headers["content-type"]
 
     def test_200_token_is_usable_for_csv_download(self):
         result = _make_valid_result(JAMIE_PARK)
+        sess = _client_with_session()
         with patch.object(app_module, "extract_card_from_bytes", return_value=result):
-            process_resp = client.post(
+            process_resp = sess.post(
                 "/process",
                 files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
-                cookies=_session_cookie(),
             )
         token = process_resp.json()["token"]
-        csv_resp = client.get(f"/download/csv?token={token}")
+        csv_resp = sess.get(f"/download/csv?token={token}")
         assert csv_resp.status_code == 200
         assert "text/csv" in csv_resp.headers["content-type"]
 
@@ -404,36 +454,40 @@ class TestProcessHappyPath:
 
 
 class TestDownloadVcf:
-    def _get_token(self, card_dict: dict | None = None) -> str:
+    def _get_token(self, card_dict: dict | None = None) -> tuple[str, TestClient]:
+        """Return (token, isolated_client). Download on the same client so the
+        L3 session-binding check passes."""
         result = _make_valid_result(card_dict or JAMIE_PARK)
+        sess = _client_with_session()
         with patch.object(app_module, "extract_card_from_bytes", return_value=result):
-            resp = client.post(
+            resp = sess.post(
                 "/process",
                 files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
-                cookies=_session_cookie(),
             )
-        return resp.json()["token"]
+        return resp.json()["token"], sess
 
     def test_200_correct_content_type_and_disposition(self):
-        token = self._get_token()
-        response = client.get(f"/download/vcf?token={token}")
+        token, sess = self._get_token()
+        response = sess.get(f"/download/vcf?token={token}")
         assert response.status_code == 200
         assert "text/vcard" in response.headers["content-type"]
         assert "attachment" in response.headers["content-disposition"]
         assert ".vcf" in response.headers["content-disposition"]
 
     def test_200_body_is_vcard(self):
-        token = self._get_token()
-        response = client.get(f"/download/vcf?token={token}")
+        token, sess = self._get_token()
+        response = sess.get(f"/download/vcf?token={token}")
         assert "BEGIN:VCARD" in response.text
         assert "END:VCARD" in response.text
 
     def test_404_unknown_token(self):
-        """A correctly signed but never-issued token returns 404."""
-        # Sign a UUID that was never stored in the token store.
+        """A correctly signed and correctly bound but never-issued token → 404."""
+        # Sign a UUID that was never stored, bound to the no-cookie session.
+        # An isolated client with no cookie makes the binding deterministic.
         phantom_id = "00000000-0000-0000-0000-000000000000"
-        signed = app_module._SERIALIZER.dumps(phantom_id)
-        response = client.get(f"/download/vcf?token={signed}")
+        signed = app_module._SERIALIZER.dumps([phantom_id, _binding_for_cookie("")])
+        fresh = TestClient(app_module.app, raise_server_exceptions=False)
+        response = fresh.get(f"/download/vcf?token={signed}")
         assert response.status_code == 404
 
     def test_410_expired_token(self):
@@ -459,27 +513,29 @@ class TestDownloadVcf:
 
 
 class TestDownloadCsv:
-    def _get_token(self) -> str:
+    def _get_token(self) -> tuple[str, TestClient]:
+        """Return (token, isolated_client); download on the same client so the
+        L3 session-binding check passes."""
         result = _make_valid_result(JAMIE_PARK)
+        sess = _client_with_session()
         with patch.object(app_module, "extract_card_from_bytes", return_value=result):
-            resp = client.post(
+            resp = sess.post(
                 "/process",
                 files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
-                cookies=_session_cookie(),
             )
-        return resp.json()["token"]
+        return resp.json()["token"], sess
 
     def test_200_correct_content_type_and_disposition(self):
-        token = self._get_token()
-        response = client.get(f"/download/csv?token={token}")
+        token, sess = self._get_token()
+        response = sess.get(f"/download/csv?token={token}")
         assert response.status_code == 200
         assert "text/csv" in response.headers["content-type"]
         assert "attachment" in response.headers["content-disposition"]
         assert ".csv" in response.headers["content-disposition"]
 
     def test_200_body_has_header_row(self):
-        token = self._get_token()
-        response = client.get(f"/download/csv?token={token}")
+        token, sess = self._get_token()
+        response = sess.get(f"/download/csv?token={token}")
         assert "Name" in response.text
         assert "Jamie Park" in response.text
 
@@ -553,6 +609,30 @@ class TestSanitizeDetail:
     def test_strips_escape_sequence(self):
         assert "\x1b" not in _sanitize_detail("hello\x1bworld")
 
+    def test_strips_unicode_c1_control_chars(self):
+        """L1: Unicode C1 controls (U+0080–U+009F) are stripped."""
+        for code in range(0x80, 0xA0):
+            char = chr(code)
+            result = _sanitize_detail(f"a{char}b")
+            assert char not in result, f"Expected U+{code:04X} to be stripped"
+            assert result == "ab"
+
+    def test_strips_bidi_override_codepoints(self):
+        """L1: bidi-override / isolate codepoints are stripped."""
+        bidi = [
+            "‪", "‫", "‬", "‭", "‮",  # embeddings/overrides
+            "⁦", "⁧", "⁨", "⁩",            # isolates
+        ]
+        for cp in bidi:
+            result = _sanitize_detail(f"safe{cp}text")
+            assert cp not in result, f"Expected U+{ord(cp):04X} to be stripped"
+            assert result == "safetext"
+
+    def test_preserves_ordinary_unicode(self):
+        """Non-control Unicode (accents, CJK, emoji) is preserved."""
+        text = "café 名刺 \U0001f600"
+        assert _sanitize_detail(text) == text
+
 
 # ---------------------------------------------------------------------------
 # Unit tests — TokenStore
@@ -585,6 +665,182 @@ class TestTokenStore:
             assert "k1" not in store._store
             assert "k2" not in store._store
 
+
+# ---------------------------------------------------------------------------
+# Security headers middleware (L4)
+# ---------------------------------------------------------------------------
+
+
+class TestSecurityHeaders:
+    def test_index_has_security_headers(self):
+        response = client.get("/")
+        assert response.status_code == 200
+        csp = response.headers.get("content-security-policy", "")
+        assert "default-src 'self'" in csp
+        assert "object-src 'none'" in csp
+        assert "frame-ancestors 'none'" in csp
+        assert response.headers.get("x-content-type-options") == "nosniff"
+        assert response.headers.get("referrer-policy") == "no-referrer"
+        assert "camera=()" in response.headers.get("permissions-policy", "")
+
+    def test_headers_present_on_json_error_responses(self):
+        """Middleware must cover non-200 paths too."""
+        response = client.post(
+            "/session/key", json={"api_key": "not-valid"}
+        )
+        assert response.status_code == 400
+        assert response.headers.get("x-content-type-options") == "nosniff"
+        assert "content-security-policy" in response.headers
+
+    def test_headers_present_on_health(self):
+        response = client.get("/health")
+        assert "content-security-policy" in response.headers
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (L2)
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimiting:
+    def test_session_key_rate_limited_after_threshold(self):
+        limit = app_module._RATE_LIMIT_SESSION_KEY
+        fresh = TestClient(app_module.app, raise_server_exceptions=False)
+        # Burn through the allowance.
+        for _ in range(limit):
+            resp = fresh.post("/session/key", json={"api_key": "not-valid"})
+            assert resp.status_code != 429
+        # The next request trips the limiter.
+        resp = fresh.post("/session/key", json={"api_key": "not-valid"})
+        assert resp.status_code == 429
+        assert resp.json()["error"] == "rate_limited"
+
+    def test_process_rate_limited_after_threshold(self):
+        limit = app_module._RATE_LIMIT_PROCESS
+        fresh = TestClient(app_module.app, raise_server_exceptions=False)
+        cookies = _session_cookie()
+        result = _make_valid_result(JAMIE_PARK)
+        with patch.object(
+            app_module, "extract_card_from_bytes", return_value=result
+        ):
+            for _ in range(limit):
+                resp = fresh.post(
+                    "/process",
+                    files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
+                    cookies=cookies,
+                )
+                assert resp.status_code != 429
+            resp = fresh.post(
+                "/process",
+                files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
+                cookies=cookies,
+            )
+        assert resp.status_code == 429
+        assert resp.json()["error"] == "rate_limited"
+
+    def test_rate_limit_keyed_by_forwarded_for(self):
+        """Distinct X-Forwarded-For clients get independent allowances."""
+        limit = app_module._RATE_LIMIT_SESSION_KEY
+        fresh = TestClient(app_module.app, raise_server_exceptions=False)
+        for _ in range(limit):
+            fresh.post(
+                "/session/key",
+                json={"api_key": "not-valid"},
+                headers={"X-Forwarded-For": "10.0.0.1"},
+            )
+        # client 10.0.0.1 is now exhausted...
+        blocked = fresh.post(
+            "/session/key",
+            json={"api_key": "not-valid"},
+            headers={"X-Forwarded-For": "10.0.0.1"},
+        )
+        assert blocked.status_code == 429
+        # ...but a different client IP is unaffected.
+        other = fresh.post(
+            "/session/key",
+            json={"api_key": "not-valid"},
+            headers={"X-Forwarded-For": "10.0.0.2"},
+        )
+        assert other.status_code == 400
+
+
+class TestRateLimiterUnit:
+    def test_allows_up_to_limit(self):
+        limiter = app_module.RateLimiter(max_requests=3, window_seconds=60)
+        assert [limiter.allow("k") for _ in range(3)] == [True, True, True]
+
+    def test_blocks_past_limit(self):
+        limiter = app_module.RateLimiter(max_requests=2, window_seconds=60)
+        limiter.allow("k")
+        limiter.allow("k")
+        assert limiter.allow("k") is False
+
+    def test_keys_are_independent(self):
+        limiter = app_module.RateLimiter(max_requests=1, window_seconds=60)
+        assert limiter.allow("a") is True
+        assert limiter.allow("b") is True
+        assert limiter.allow("a") is False
+
+    def test_window_eviction_restores_allowance(self):
+        limiter = app_module.RateLimiter(max_requests=1, window_seconds=0)
+        assert limiter.allow("k") is True
+        # window_seconds=0 means every prior hit is immediately outside it.
+        assert limiter.allow("k") is True
+
+
+# ---------------------------------------------------------------------------
+# Download token / session binding (L3)
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadTokenBinding:
+    def _mint_token(self, sess: TestClient) -> str:
+        result = _make_valid_result(JAMIE_PARK)
+        with patch.object(
+            app_module, "extract_card_from_bytes", return_value=result
+        ):
+            resp = sess.post(
+                "/process",
+                files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
+            )
+        return resp.json()["token"]
+
+    def test_token_redeemable_by_issuing_session(self):
+        sess = _client_with_session()
+        token = self._mint_token(sess)
+        resp = sess.get(f"/download/vcf?token={token}")
+        assert resp.status_code == 200
+
+    def test_token_rejected_for_different_session(self):
+        """A token leaked to another session must not redeem (400)."""
+        issuer = _client_with_session()
+        token = self._mint_token(issuer)
+        # A different client with its own (distinct) session cookie value.
+        attacker = _client_with_session()
+        resp = attacker.get(f"/download/vcf?token={token}")
+        assert resp.status_code == 400
+
+    def test_token_rejected_when_session_absent(self):
+        issuer = _client_with_session()
+        token = self._mint_token(issuer)
+        no_session = TestClient(app_module.app, raise_server_exceptions=False)
+        resp = no_session.get(f"/download/vcf?token={token}")
+        assert resp.status_code == 400
+
+    def test_legacy_string_payload_rejected(self):
+        """Old single-string token payloads (pre-L3) are no longer accepted."""
+        signed = app_module._SERIALIZER.dumps("some-token-id")
+        fresh = TestClient(app_module.app, raise_server_exceptions=False)
+        resp = fresh.get(f"/download/vcf?token={signed}")
+        assert resp.status_code == 400
+
+    def test_csv_download_also_binds_to_session(self):
+        issuer = _client_with_session()
+        token = self._mint_token(issuer)
+        attacker = _client_with_session()
+        resp = attacker.get(f"/download/csv?token={token}")
+        assert resp.status_code == 400
+
     def test_thread_safety_basic(self):
         """Concurrent puts and gets should not raise."""
         import threading
@@ -611,3 +867,82 @@ class TestTokenStore:
         for t in threads:
             t.join()
         assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# GET /download/csv — error paths (404, 410, 400)
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadCsvErrorPaths:
+    """The CSV download shares _resolve_token with VCF but previously had no
+    error-path coverage. These tests close that gap."""
+
+    def test_404_unknown_token(self):
+        """A valid, well-bound token that was never stored returns 404."""
+        phantom_id = "00000000-0000-0000-0000-000000000001"
+        signed = app_module._SERIALIZER.dumps([phantom_id, _binding_for_cookie("")])
+        fresh = TestClient(app_module.app, raise_server_exceptions=False)
+        response = fresh.get(f"/download/csv?token={signed}")
+        assert response.status_code == 404
+
+    def test_410_expired_token(self):
+        """An expired token returns 410 on the CSV endpoint too."""
+        from itsdangerous import SignatureExpired
+
+        with patch.object(
+            app_module._SERIALIZER,
+            "loads",
+            side_effect=SignatureExpired("token expired"),
+        ):
+            response = client.get("/download/csv?token=anything")
+        assert response.status_code == 410
+
+    def test_400_bad_signature(self):
+        """A tampered token returns 400 on the CSV endpoint."""
+        response = client.get("/download/csv?token=not.a.valid.token")
+        assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /process — malformed Content-Length header
+# ---------------------------------------------------------------------------
+
+
+class TestProcessMalformedContentLength:
+    def test_malformed_content_length_header_falls_through_to_byte_check(self):
+        """A non-integer Content-Length header must not raise a 500. The route
+        silently falls through to the post-read byte-level size check."""
+        result = _make_valid_result(JAMIE_PARK)
+        with patch.object(app_module, "extract_card_from_bytes", return_value=result):
+            response = client.post(
+                "/process",
+                files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
+                cookies=_session_cookie(),
+                headers={"Content-Length": "not-an-integer"},
+            )
+        # Should process normally (malformed header is silently ignored).
+        assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# POST /process — MIME type not in allow-list (image/gif)
+# ---------------------------------------------------------------------------
+
+
+class TestProcessUnsupportedMimeTypes:
+    @pytest.mark.parametrize("mime_type", ["image/gif", "image/bmp", "image/tiff"])
+    def test_400_unsupported_image_mime(self, mime_type):
+        """MIME types that are not in the explicit allowlist return 400."""
+        with patch.object(
+            app_module,
+            "extract_card_from_bytes",
+            side_effect=UnsupportedMimeType(f"unsupported: {mime_type}"),
+        ):
+            response = client.post(
+                "/process",
+                files={"file": ("card.img", _TINY_JPEG, mime_type)},
+                cookies=_session_cookie(),
+            )
+        assert response.status_code == 400
+        assert response.json()["error"] == "invalid_file_type"

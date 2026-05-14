@@ -22,14 +22,15 @@ dependencies = [
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0",
     "jinja2>=3.1.4",
-    "python-multipart>=0.0.9",
+    # Phase 6 security: floors raised to clear known CVEs. See requirements.txt.
+    "python-multipart>=0.0.27",
     "baml-py>=0.218.0",
     "cryptography>=41.0.0",
-    "pillow>=10.3.0",
+    "pillow>=12.2.0",
     "pillow-heif>=0.16.0",
     "pydantic>=2.7.0",
     "itsdangerous>=2.2.0",
-    "python-dotenv>=1.0.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.optional-dependencies]

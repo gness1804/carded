@@ -115,3 +115,5 @@ Remaining project budget after this session: ~21–29% weekly all-models. Comfor
 ---
 
 *End of handoff. Resume Phase 4 from the brief in `3-phase-1-complete-handoff.md`.*
+
+<!-- DONE -->

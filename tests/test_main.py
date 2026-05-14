@@ -50,6 +50,11 @@ TINY_JPEG = (
     b"STUVWXYZ\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xfb\xd3P\x00\x00\x00\xff\xd9"
 )
 
+# Minimal bytes with a valid HEIC ISO-BMFF header: 'ftyp' box at offset 4,
+# 'heic' brand at offset 8 — enough for _sniff_image_mime to recognize it.
+# (The HEIC->JPEG conversion itself is mocked in the tests that use this.)
+TINY_HEIC = b"\x00\x00\x00\x18ftypheic" + b"\x00" * 16
+
 
 def _make_valid_card(**overrides) -> BusinessCard:
     """Return a minimal VALID BusinessCard for mocking."""
@@ -263,6 +268,70 @@ def test_image_mime_validation_accepts_all_supported_types():
 
 
 # ---------------------------------------------------------------------------
+# Tests: magic-byte content sniffing (M5)
+# ---------------------------------------------------------------------------
+
+
+def test_sniff_recognizes_jpeg():
+    from main import _sniff_image_mime
+    assert _sniff_image_mime(TINY_JPEG) == "image/jpeg"
+
+
+def test_sniff_recognizes_png():
+    from main import _sniff_image_mime
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    assert _sniff_image_mime(png) == "image/png"
+
+
+def test_sniff_recognizes_webp():
+    from main import _sniff_image_mime
+    webp = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 8
+    assert _sniff_image_mime(webp) == "image/webp"
+
+
+def test_sniff_recognizes_heic():
+    from main import _sniff_image_mime
+    assert _sniff_image_mime(TINY_HEIC) == "image/heif"
+
+
+def test_sniff_rejects_non_image_bytes():
+    from main import _sniff_image_mime
+    assert _sniff_image_mime(b"%PDF-1.7 not an image at all") is None
+    assert _sniff_image_mime(b"plain text") is None
+    assert _sniff_image_mime(b"tiny") is None  # shorter than 12 bytes
+
+
+def test_non_image_bytes_rejected_even_with_valid_declared_mime():
+    """A non-image payload disguised with Content-Type: image/jpeg is rejected
+    by the magic-byte check — the declared MIME type is not trusted."""
+    with pytest.raises(UnsupportedMimeType, match="not a recognized image"):
+        extract_card_from_bytes(
+            b"%PDF-1.7 this is actually a pdf",
+            "image/jpeg",
+            "sk-ant-test",
+        )
+
+
+def test_sniffed_type_drives_routing_over_declared_type():
+    """When the declared type and the real bytes disagree, the real bytes win:
+    HEIC bytes declared as image/jpeg still go through HEIC conversion."""
+    mock_card = _make_valid_card()
+    mock_client = MagicMock()
+    mock_client.ExtractBusinessCard.return_value = mock_card
+    mock_b = MagicMock()
+    mock_b.with_options.return_value = mock_client
+    fake_jpeg_bytes = b"\xff\xd8\xff" + b"\x00" * 100
+
+    with patch("main.b", mock_b), patch(
+        "main._convert_heic_to_jpeg", return_value=(fake_jpeg_bytes, "image/jpeg")
+    ) as mock_convert:
+        result = extract_card_from_bytes(TINY_HEIC, "image/jpeg", "sk-ant-test")
+
+    mock_convert.assert_called_once_with(TINY_HEIC)
+    assert isinstance(result, Valid)
+
+
+# ---------------------------------------------------------------------------
 # Tests: HEIC conversion
 # ---------------------------------------------------------------------------
 
@@ -281,12 +350,12 @@ def test_heic_converted_to_jpeg_before_baml_call():
         "main._convert_heic_to_jpeg", return_value=(fake_jpeg_bytes, "image/jpeg")
     ) as mock_convert:
         result = extract_card_from_bytes(
-            image_data=b"fake-heic-data",
+            image_data=TINY_HEIC,
             mime_type="image/heic",
             api_key="sk-ant-test",
         )
 
-    mock_convert.assert_called_once_with(b"fake-heic-data")
+    mock_convert.assert_called_once_with(TINY_HEIC)
     assert isinstance(result, Valid)
 
     # Verify BAML received image/jpeg via as_base64() -> [b64_str, media_type]
@@ -310,12 +379,60 @@ def test_heif_also_triggers_conversion():
         "main._convert_heic_to_jpeg", return_value=(fake_jpeg_bytes, "image/jpeg")
     ) as mock_convert:
         extract_card_from_bytes(
-            image_data=b"fake-heif-data",
+            image_data=TINY_HEIC,
             mime_type="image/heif",
             api_key="sk-ant-test",
         )
 
-    mock_convert.assert_called_once_with(b"fake-heif-data")
+    mock_convert.assert_called_once_with(TINY_HEIC)
+
+
+# ---------------------------------------------------------------------------
+# Tests: HEIC decompression-bomb guard
+# ---------------------------------------------------------------------------
+
+
+def test_heic_oversized_image_rejected():
+    """A HEIC image whose pixel count exceeds the guard is rejected before
+    the full raster is forced into memory by convert()/save()."""
+    from main import _convert_heic_to_jpeg, _MAX_IMAGE_PIXELS
+
+    oversized = MagicMock()
+    oversized.size = (_MAX_IMAGE_PIXELS + 1, 1)
+    with patch("main.PilImage.open", return_value=oversized):
+        with pytest.raises(UnsupportedMimeType, match="exceeds"):
+            _convert_heic_to_jpeg(b"fake-heic-bytes")
+    oversized.convert.assert_not_called()
+
+
+def test_heic_within_limit_is_converted():
+    """A HEIC image within the pixel limit converts to JPEG normally."""
+    from main import _convert_heic_to_jpeg
+
+    img = MagicMock()
+    img.size = (1000, 1000)  # 1 MP — well under the limit
+    rgb = MagicMock()
+    img.convert.return_value = rgb
+
+    def _fake_save(buf, format, **kwargs):  # noqa: A002 — mirrors PIL's kwarg name
+        buf.write(b"\xff\xd8\xff-jpeg-bytes")
+
+    rgb.save.side_effect = _fake_save
+    with patch("main.PilImage.open", return_value=img):
+        data, mime = _convert_heic_to_jpeg(b"fake-heic-bytes")
+    assert mime == "image/jpeg"
+    assert data == b"\xff\xd8\xff-jpeg-bytes"
+    img.convert.assert_called_once_with("RGB")
+
+
+def test_heic_undecodable_raises_unsupported_mime():
+    """A HEIC payload PIL cannot open is surfaced as UnsupportedMimeType,
+    not as an unhandled 500."""
+    from main import _convert_heic_to_jpeg
+
+    with patch("main.PilImage.open", side_effect=OSError("broken file")):
+        with pytest.raises(UnsupportedMimeType, match="Could not decode"):
+            _convert_heic_to_jpeg(b"not-really-heic")
 
 
 # ---------------------------------------------------------------------------

@@ -110,6 +110,29 @@ _MAX_PHONES = 4
 _MAX_EMAILS = 2
 _MAX_URLS = 2
 
+# CSV / formula-injection: a cell whose value begins with one of these is
+# treated as a formula by Excel / Google Sheets when the exported file is
+# opened directly. Prefixing such values with a single quote forces text
+# interpretation. Phone-value columns use the reduced set below so that
+# legitimate international numbers ("+1-415-...") are preserved — "+" without
+# "=" / "@" is not a code-execution vector for a bare phone string.
+_CSV_FORMULA_TRIGGERS: frozenset[str] = frozenset("=+-@\t\r")
+_CSV_FORMULA_TRIGGERS_PHONE: frozenset[str] = frozenset("=-@\t\r")
+
+
+def _neutralize_formula(
+    value: str, triggers: frozenset[str] = _CSV_FORMULA_TRIGGERS
+) -> str:
+    """Prefix a leading single quote if ``value`` could be read as a formula.
+
+    Guards against CSV / formula injection when a user opens the exported
+    file in a spreadsheet app. Empty values are returned unchanged.
+    """
+    if value and value[0] in triggers:
+        return "'" + value
+    return value
+
+
 # The card dict shape mirrors BusinessCardJson from the interface contract.
 CardDict = dict[str, Any]
 
@@ -222,6 +245,20 @@ def build_google_csv(card: CardDict) -> str:
             row["Address 1 - Region"] = state
             row["Address 1 - Postal Code"] = postal
             row["Address 1 - Country"] = country
+
+    # ── Neutralize CSV / formula injection ───────────────────────────────────
+    # Card fields are LLM-extracted from attacker-supplied images. Prefix any
+    # value that a spreadsheet app would evaluate as a formula. Phone-value
+    # columns use the reduced trigger set so legitimate "+<country code>"
+    # numbers are not altered.
+    for col, val in row.items():
+        if not val:
+            continue
+        is_phone_value = col.startswith("Phone ") and col.endswith(" - Value")
+        triggers = (
+            _CSV_FORMULA_TRIGGERS_PHONE if is_phone_value else _CSV_FORMULA_TRIGGERS
+        )
+        row[col] = _neutralize_formula(val, triggers)
 
     # ── Serialise ─────────────────────────────────────────────────────────────
     buf = io.StringIO()

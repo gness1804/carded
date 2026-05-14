@@ -169,6 +169,17 @@ Sent when the `carded_session` cookie is absent or cannot be decrypted.
 
 Wraps BAML client errors, network timeouts, and unexpected exceptions from the extraction pipeline. Internal error details are never surfaced to the client.
 
+### 429 RATE_LIMITED
+
+```json
+{
+  "error": "rate_limited",
+  "message": "Too many requests. Please wait a moment and try again."
+}
+```
+
+> **Added in Phase 6 (L2).** `POST /process` and `POST /session/key` are protected by an in-process, per-client-IP sliding-window rate limiter (defense-in-depth abuse mitigation). When the per-client allowance is exceeded the endpoint returns 429 before any other processing. Limits are configurable via `RATE_LIMIT_PROCESS`, `RATE_LIMIT_SESSION_KEY`, and `RATE_LIMIT_WINDOW_SECONDS`. This is the only error code added since the Phase 4 contract was signed off.
+
 ---
 
 ## C. Download Endpoints
@@ -203,7 +214,9 @@ Body is a Google Contacts-compatible CSV string.
 |---|---|
 | 404 Not Found | Token is unknown (was never issued) |
 | 410 Gone | Token is known but has expired (>15 min TTL) |
-| 400 Bad Request | Token signature is invalid (tampered or wrong secret) |
+| 400 Bad Request | Token signature is invalid (tampered or wrong secret), or the token was issued to a different session (binding mismatch — see below) |
+
+> **Session binding added in Phase 6 (L3).** The signed token payload is a `[token_id, session_binding]` pair, where `session_binding` is an HMAC of the issuing request's `carded_session` cookie value. The download endpoints re-derive the binding from the request cookie and compare it in constant time, so a leaked or shared token cannot be redeemed from a different session. The endpoint shape, success responses, and the 404/410/400 status set are unchanged; only the 400 condition is broadened. Legacy single-string token payloads (pre-L3) are rejected with 400.
 
 ---
 

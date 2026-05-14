@@ -16,11 +16,15 @@ the download endpoints. Tokens are stored in an in-memory TokenStore with a
 TTL enforced both server-side and by the itsdangerous signature.
 """
 
+import hashlib
+import hmac
 import logging
 import os
 import threading
 import time
+import unicodedata
 import uuid
+from collections import deque
 
 from cryptography.fernet import Fernet  # noqa: F401 — used in tests via import
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -75,6 +79,26 @@ _MAX_FILE_SIZE_BYTES: int = _MAX_FILE_SIZE_MB * 1024 * 1024
 # Secure cookie flag: True by default (prod HTTPS); allow override for local HTTP dev.
 _COOKIE_SECURE: bool = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
 
+# Rate limiting — sliding-window, per-client-IP, in-process. Defaults are
+# generous for a single-user BYOK app; tune via env in production. This is
+# defense-in-depth abuse mitigation, not an authz control, and is not a
+# substitute for an edge/proxy limiter at scale.
+_RATE_LIMIT_WINDOW_SECONDS: int = int(
+    os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60")
+)
+_RATE_LIMIT_PROCESS: int = int(os.environ.get("RATE_LIMIT_PROCESS", "15"))
+_RATE_LIMIT_SESSION_KEY: int = int(
+    os.environ.get("RATE_LIMIT_SESSION_KEY", "20")
+)
+
+# Number of trusted reverse proxies in front of the app. X-Forwarded-For is a
+# left-to-right list "<client>, <proxy1>, <proxy2>, ..." where each hop appends
+# the address that connected to it; only the right-most N entries are added by
+# infrastructure we control. The real client is the entry N positions from the
+# right. Render fronts the app with one proxy layer -> default 1. Set to 0 to
+# ignore X-Forwarded-For entirely (direct-connection deployments).
+_TRUSTED_PROXY_HOPS: int = int(os.environ.get("TRUSTED_PROXY_HOPS", "1"))
+
 _SERIALIZER = URLSafeTimedSerializer(_DOWNLOAD_TOKEN_SECRET)
 
 # ---------------------------------------------------------------------------
@@ -128,6 +152,55 @@ class TokenStore:
 _token_store = TokenStore(ttl_seconds=_DOWNLOAD_TOKEN_TTL_SECONDS)
 
 # ---------------------------------------------------------------------------
+# RateLimiter — in-memory, sliding-window, thread-safe
+# ---------------------------------------------------------------------------
+
+
+class RateLimiter:
+    """Thread-safe sliding-window rate limiter keyed by an arbitrary string.
+
+    Tracks request timestamps per key in a bounded deque, evicting entries
+    older than the window on each check. Memory is bounded by the number of
+    distinct keys (client IPs) seen within a window — acceptable for an
+    in-process, single-node MVP limiter.
+    """
+
+    def __init__(self, max_requests: int, window_seconds: int) -> None:
+        self._max = max_requests
+        self._window = window_seconds
+        self._hits: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        """Record a hit for ``key``; return False if it exceeds the limit."""
+        now = time.time()
+        cutoff = now - self._window
+        with self._lock:
+            # Opportunistically sweep every key so the map cannot grow
+            # unbounded as clients (or spoofed X-Forwarded-For values) churn.
+            for existing_key in list(self._hits.keys()):
+                bucket = self._hits[existing_key]
+                while bucket and bucket[0] <= cutoff:
+                    bucket.popleft()
+                if not bucket:
+                    del self._hits[existing_key]
+
+            bucket = self._hits.get(key)
+            if bucket is None:
+                bucket = deque()
+                self._hits[key] = bucket
+            if len(bucket) >= self._max:
+                return False
+            bucket.append(now)
+            return True
+
+
+_session_key_limiter = RateLimiter(
+    _RATE_LIMIT_SESSION_KEY, _RATE_LIMIT_WINDOW_SECONDS
+)
+_process_limiter = RateLimiter(_RATE_LIMIT_PROCESS, _RATE_LIMIT_WINDOW_SECONDS)
+
+# ---------------------------------------------------------------------------
 # FastAPI app + static files + templates
 # ---------------------------------------------------------------------------
 
@@ -135,6 +208,32 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 templates.env.globals["app_version"] = __version__
+
+# ---------------------------------------------------------------------------
+# Security headers middleware (L4)
+# ---------------------------------------------------------------------------
+
+# img-src allows blob:/data: for the client-side upload preview. No inline
+# scripts or styles exist in the templates, so default-src 'self' is enough
+# to cover script-src/style-src without 'unsafe-inline'.
+_SECURITY_HEADERS: dict[str, str] = {
+    "Content-Security-Policy": (
+        "default-src 'self'; img-src 'self' blob: data:; "
+        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next):
+    """Attach hardening response headers to every response."""
+    response = await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
 
 # ---------------------------------------------------------------------------
 # Pydantic request model
@@ -158,12 +257,23 @@ def is_owner(api_key: str | None) -> bool:
 
 
 def _sanitize_detail(s: str, max_len: int = 200) -> str:
-    """Strip control characters (ASCII < 0x20 except \\n/\\t) and cap length.
+    """Strip control / format characters and cap length on LLM-derived text.
+
+    Removes every Unicode "Cc" (control — both ASCII C0 and the C1 range
+    U+0080–U+009F) and "Cf" (format) character, keeping only ``\\n`` and
+    ``\\t``. The "Cf" category covers bidi overrides/isolates (U+202A–U+202E,
+    U+2066–U+2069), directional marks (U+200E/200F), zero-width characters
+    (U+200B–U+200D), and the BOM (U+FEFF) — all usable for visual spoofing.
 
     Do NOT HTML-escape here — Jinja autoescape handles render-time escaping
     and JSON consumers should not receive double-escaped output.
     """
-    cleaned = "".join(c for c in s if c == "\n" or c == "\t" or ord(c) >= 0x20)
+    cleaned = "".join(
+        c
+        for c in s
+        if (c == "\n" or c == "\t")
+        or unicodedata.category(c) not in ("Cc", "Cf")
+    )
     return cleaned[:max_len]
 
 
@@ -173,6 +283,56 @@ def _get_session_key(request: Request) -> str | None:
     if not token:
         return None
     return session_module.decrypt_api_key(token)
+
+
+def _client_key(request: Request) -> str:
+    """Client identifier for rate limiting, resilient to X-Forwarded-For spoofing.
+
+    The left-most X-Forwarded-For entries are attacker-controlled — a client
+    can prepend arbitrary values. Only the right-most ``_TRUSTED_PROXY_HOPS``
+    entries are appended by infrastructure we control, so the genuine client
+    is the entry ``_TRUSTED_PROXY_HOPS`` positions from the right. If the
+    header is missing, shorter than expected, or trust is disabled
+    (hops == 0), fall back to the direct socket peer.
+    """
+    peer = request.client.host if request.client else "unknown"
+    if _TRUSTED_PROXY_HOPS <= 0:
+        return peer
+    xff = request.headers.get("x-forwarded-for")
+    if not xff:
+        return peer
+    parts = [p.strip() for p in xff.split(",") if p.strip()]
+    if len(parts) >= _TRUSTED_PROXY_HOPS:
+        return parts[-_TRUSTED_PROXY_HOPS]
+    # Chain shorter than configured — header is malformed or spoofed; do not
+    # trust it, fall back to the socket peer.
+    return peer
+
+
+def _rate_limited_response() -> JSONResponse:
+    """Standard 429 response for rate-limited endpoints."""
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "rate_limited",
+            "message": "Too many requests. Please wait a moment and try again.",
+        },
+    )
+
+
+def _session_binding(request: Request) -> str:
+    """HMAC of the carded_session cookie value.
+
+    Download tokens embed this so a leaked or shared token cannot be redeemed
+    from a different session. An absent cookie hashes to a stable value, so a
+    token minted without a session still only redeems without a session.
+    """
+    cookie_value = request.cookies.get("carded_session", "")
+    return hmac.new(
+        _DOWNLOAD_TOKEN_SECRET.encode(),
+        cookie_value.encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -218,14 +378,18 @@ async def index(request: Request) -> Response:
 
 
 @app.post("/session/key")
-async def set_session_key(submission: KeySubmission) -> Response:
+async def set_session_key(request: Request, submission: KeySubmission) -> Response:
     """Accept a BYOK Anthropic API key, validate its format, and store in cookie.
 
     Returns:
         200 with JSON ``{"ok": true, "is_owner": <bool>, "masked_key": <str>}``
         and the Set-Cookie header on success.
         400 JSON error on invalid key format.
+        429 JSON error when the per-client rate limit is exceeded.
     """
+    if not _session_key_limiter.allow(_client_key(request)):
+        return _rate_limited_response()
+
     api_key = submission.api_key
 
     if not api_key.startswith("sk-ant-"):
@@ -275,8 +439,13 @@ async def process(request: Request, file: UploadFile) -> Response:
 
     Returns:
         200 ``{"token": "<signed>", "card": <card_dict>}`` on success.
+        429 when the per-client rate limit is exceeded.
         See interface contract for error shapes.
     """
+    # 0. Rate limit (defense-in-depth abuse mitigation)
+    if not _process_limiter.allow(_client_key(request)):
+        return _rate_limited_response()
+
     # 1. Auth
     api_key = _get_session_key(request)
     if api_key is None:
@@ -345,7 +514,9 @@ async def process(request: Request, file: UploadFile) -> Response:
         card_dict = result.card.model_dump()
         token_id = str(uuid.uuid4())
         _token_store.put(token_id, card_dict)
-        signed_token = _SERIALIZER.dumps(token_id)
+        # Bind the token to the issuing session (L3): the signed payload
+        # carries an HMAC of the session cookie, verified again on download.
+        signed_token = _SERIALIZER.dumps([token_id, _session_binding(request)])
         return JSONResponse(
             status_code=200,
             content={"token": signed_token, "card": card_dict},
@@ -373,19 +544,20 @@ async def process(request: Request, file: UploadFile) -> Response:
 
 
 @app.get("/download/vcf")
-async def download_vcf(token: str) -> Response:
+async def download_vcf(request: Request, token: str) -> Response:
     """Download the extracted business card as a vCard 3.0 file.
 
     Args:
-        token: Signed UUID issued by POST /process.
+        token: Signed token issued by POST /process.
 
     Returns:
         200 with text/vcard body and Content-Disposition attachment header.
-        400 if the signature is invalid (tampered token).
+        400 if the signature is invalid or the token was issued to a
+            different session (binding mismatch).
         404 if the token is unknown (never issued or already swept).
         410 if the token has expired.
     """
-    token_id, error_response = _resolve_token(token)
+    token_id, error_response = _resolve_token(token, request)
     if error_response is not None:
         return error_response
 
@@ -403,19 +575,20 @@ async def download_vcf(token: str) -> Response:
 
 
 @app.get("/download/csv")
-async def download_csv(token: str) -> Response:
+async def download_csv(request: Request, token: str) -> Response:
     """Download the extracted business card as a Google Contacts CSV file.
 
     Args:
-        token: Signed UUID issued by POST /process.
+        token: Signed token issued by POST /process.
 
     Returns:
         200 with text/csv body and Content-Disposition attachment header.
-        400 if the signature is invalid (tampered token).
+        400 if the signature is invalid or the token was issued to a
+            different session (binding mismatch).
         404 if the token is unknown.
         410 if the token has expired.
     """
-    token_id, error_response = _resolve_token(token)
+    token_id, error_response = _resolve_token(token, request)
     if error_response is not None:
         return error_response
 
@@ -447,18 +620,32 @@ async def health() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_token(token: str) -> tuple[str, Response | None]:
-    """Unsign a download token and return (token_id, None) on success.
+def _resolve_token(token: str, request: Request) -> tuple[str, Response | None]:
+    """Unsign a download token and verify it was issued to this session.
 
-    On failure returns ("", error_response) where error_response is a
-    ready-to-return Response with the appropriate status code.
+    The signed payload is a ``[token_id, session_binding]`` pair. The binding
+    is re-derived from the request's session cookie and compared in constant
+    time, so a token leaked to another client cannot be redeemed.
+
+    Returns (token_id, None) on success. On failure returns ("", error_response):
+        410 — signature valid but expired.
+        400 — signature invalid, payload malformed, or binding mismatch.
     """
     try:
-        token_id: str = _SERIALIZER.loads(
-            token, max_age=_DOWNLOAD_TOKEN_TTL_SECONDS
-        )
-        return token_id, None
+        payload = _SERIALIZER.loads(token, max_age=_DOWNLOAD_TOKEN_TTL_SECONDS)
     except SignatureExpired:
         return "", Response(status_code=410)
     except BadSignature:
         return "", Response(status_code=400)
+
+    if (
+        not isinstance(payload, list)
+        or len(payload) != 2
+        or not all(isinstance(part, str) for part in payload)
+    ):
+        return "", Response(status_code=400)
+
+    token_id, bound = payload
+    if not hmac.compare_digest(bound, _session_binding(request)):
+        return "", Response(status_code=400)
+    return token_id, None
