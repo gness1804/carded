@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "carded"
-version = "0.1.0"
+version = "0.1.1"
+# NOTE: keep app.py:__version__ in sync with the value above. /health surfaces
+# the runtime value from app.py so we can verify what's actually deployed.
 description = "Business card scanner that extracts structured contact data using BAML and LLMs"
 readme = "README.md"
 requires-python = ">=3.11"

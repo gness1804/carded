@@ -43,6 +43,9 @@ from main import (
 from vcard_builder import build_vcf, vcf_filename
 from google_csv_builder import build_google_csv, csv_filename
 
+# Keep in sync with pyproject.toml [project] version. Surfaced via /health.
+__version__ = "0.1.1"
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -430,8 +433,12 @@ async def download_csv(token: str) -> Response:
 
 @app.get("/health")
 async def health() -> dict:
-    """Liveness probe for load-balancer / orchestrator health checks."""
-    return {"status": "ok"}
+    """Liveness probe for load-balancer / orchestrator health checks.
+
+    Also surfaces the runtime version so deployments can be verified
+    without inspecting the commit hash.
+    """
+    return {"status": "ok", "version": __version__}
 
 
 # ---------------------------------------------------------------------------
