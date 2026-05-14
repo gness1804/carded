@@ -6,6 +6,8 @@ type: runbook
 
 # Phase 5 — Render + Cloudflare Deployment Runbook
 
+**Status (2026-05-13):** Live on `*.onrender.com`. Custom domain (`carded.io`) cutover **deferred** — tracked in `.cursor/features/1-custom-domain-carded-io-cutover.md`. Steps 1, 2, and 4 below were completed; Step 3 (Cloudflare DNS) is the deferred work and remains documented here as the operator reference for when Graham picks it up.
+
 The Dockerfile, `.dockerignore`, and `render.yaml` have been built and locally smoke-tested. This runbook covers the operator steps that require Graham's account access.
 
 ## Artifacts already on disk
@@ -67,7 +69,9 @@ Then in a browser at `$URL`:
 
 If anything fails, check **Logs** in the Render dashboard. The image runs as `appuser` (non-root) — no `sudo` available; if you need to shell in, use Render's built-in shell.
 
-## Step 3 — Cloudflare DNS cutover
+## Step 3 — Cloudflare DNS cutover (DEFERRED)
+
+> **Deferred 2026-05-13.** Carded is live on `*.onrender.com`. The DNS cutover is tracked as a separate feature in `.cursor/features/1-custom-domain-carded-io-cutover.md`. Steps below remain authoritative for when Graham picks this up.
 
 Assuming you've already registered `carded.io` and it's on Cloudflare:
 
