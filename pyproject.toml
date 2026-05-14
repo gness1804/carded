@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carded"
+version = "0.2.0"
+# NOTE: keep app.py:__version__ in sync with the value above. /health surfaces
+# the runtime value from app.py so we can verify what's actually deployed.
+description = "Business card scanner that extracts structured contact data using BAML and LLMs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["business-card", "contacts", "vcard", "baml", "llm", "structured-extraction"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "jinja2>=3.1.4",
+    # Phase 6 security: floors raised to clear known CVEs. See requirements.txt.
+    "python-multipart>=0.0.27",
+    "baml-py>=0.218.0",
+    "cryptography>=41.0.0",
+    "pillow>=12.2.0",
+    "pillow-heif>=0.16.0",
+    "pydantic>=2.7.0",
+    "itsdangerous>=2.2.0",
+    "python-dotenv>=1.2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+    "bump2version>=1.0.0",
+]
+
+[tool.ruff]
+exclude = ["baml_client/*", "baml_src/*"]
+
+[tool.black]
+exclude = '/(baml_client|baml_src)/'
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"

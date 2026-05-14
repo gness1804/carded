@@ -1,0 +1,39 @@
+# Version control
+.git/
+.gitignore
+
+# Editor / IDE
+.cursor/
+.DS_Store
+
+# Tests and test data
+tests/
+test-cards/
+data/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment files (no secrets in image)
+.env
+.env.*
+
+# Docker artifacts (not needed inside image)
+Dockerfile
+.dockerignore
+
+# Node (none expected, but belt-and-suspenders)
+node_modules/
+
+# Docs and markdown (not needed at runtime)
+*.md
+AGENTS.md

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/grahamnessler/scripts/todoist/**)",
+      "Read(//Users/grahamnessler/**)"
+    ]
+  }
+}

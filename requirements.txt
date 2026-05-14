@@ -1,0 +1,39 @@
+# Carded - Production Dependencies
+# Generated from pyproject.toml
+# Note: baml-py must be pinned to an exact version.
+# BAML enforces an exact match between the runtime and the generator that
+# produced baml_client/ — >= will break in Docker/CI builds.
+
+# Web framework
+fastapi>=0.111.0
+# Pin Starlette < 1.0 — Starlette 1.0 removed the deprecated
+# TemplateResponse(name, context) signature that app.py uses. Lifting this
+# pin requires migrating templates.TemplateResponse(...) calls in app.py to
+# the new TemplateResponse(request=..., name=..., context=...) form.
+starlette>=0.40,<1.0
+uvicorn[standard]>=0.29.0
+jinja2>=3.1.4
+# Floor raised in Phase 6: 0.0.21 and earlier carry CVE-2026-24486 /
+# CVE-2026-40347 / CVE-2026-42561 in the multipart form parser — the exact
+# code path that handles /process uploads.
+python-multipart>=0.0.27
+
+# Structured LLM extraction
+baml-py==0.218.0
+
+# Image processing (HEIC/HEIF support for iPhone photos)
+# Floor raised in Phase 6: Pillow < 12.2.0 carries several image-parsing CVEs
+# (CVE-2026-25990, -40192, -42308..-42311) reachable via the HEIC->JPEG decode.
+pillow>=12.2.0
+pillow-heif>=0.16.0
+
+# Data validation
+pydantic>=2.7.0
+
+# API key encryption (session cookies) and download token signing
+cryptography>=41.0.0
+itsdangerous>=2.2.0
+
+# Environment variable loading
+# Floor raised in Phase 6: python-dotenv < 1.2.2 carries CVE-2026-28684.
+python-dotenv>=1.2.2
