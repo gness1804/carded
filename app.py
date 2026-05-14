@@ -134,6 +134,7 @@ _token_store = TokenStore(ttl_seconds=_DOWNLOAD_TOKEN_TTL_SECONDS)
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+templates.env.globals["app_version"] = __version__
 
 # ---------------------------------------------------------------------------
 # Pydantic request model

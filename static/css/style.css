@@ -713,3 +713,17 @@ a:hover {
     padding: var(--space-12) var(--space-8);
   }
 }
+
+/* ── 14. Footer ──────────────────────────────────────────── */
+.site-footer {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-5) var(--space-6);
+  text-align: center;
+}
+
+.site-footer__version {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  letter-spacing: 0.01em;
+}
