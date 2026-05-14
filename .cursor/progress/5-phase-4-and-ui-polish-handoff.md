@@ -1,9 +1,11 @@
 ---
+description: Captures Phase 4 (FastAPI app + UI) completion, the post-build UI/UX
+  polish (key indicator, change-key flow, upload reset, preview robustness), the Opus
+  security review verdict, and exact pickup points for Phases 5 + 6.
+github_issue: 7
 name: Phase 4 + UI Polish Complete — Handoff to Phase 5/6
-description: Captures Phase 4 (FastAPI app + UI) completion, the post-build UI/UX polish (key indicator, change-key flow, upload reset, preview robustness), the Opus security review verdict, and exact pickup points for Phases 5 + 6.
 type: handoff
 ---
-
 # Phase 4 + UI Polish Complete — Handoff for Next Session
 
 **Date:** 2026-05-12

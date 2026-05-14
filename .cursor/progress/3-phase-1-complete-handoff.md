@@ -1,9 +1,10 @@
 ---
+description: Captures Phase 1 completion state, what's on disk, the Phase 1 commit,
+  and exact pickup points for Phases 2/3 and Phase 4 when work resumes.
+github_issue: 5
 name: Phase 1 Complete — Handoff to Phase 2
-description: Captures Phase 1 completion state, what's on disk, the Phase 1 commit, and exact pickup points for Phases 2/3 and Phase 4 when work resumes.
 type: handoff
 ---
-
 # Phase 1 Complete — Handoff for Tomorrow's Pickup
 
 **Date:** 2026-05-01

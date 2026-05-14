@@ -1,10 +1,12 @@
 ---
+description: Cut Carded over from the default *.onrender.com domain to a custom domain
+  (carded.io or fallback). Add the custom domain in Render, configure Cloudflare DNS,
+  verify TLS, and live-smoke-test.
+github_issue: 2
 name: custom-domain-carded-io-cutover
-description: Cut Carded over from the default *.onrender.com domain to a custom domain (carded.io or fallback). Add the custom domain in Render, configure Cloudflare DNS, verify TLS, and live-smoke-test.
-type: feature
 status: open
+type: feature
 ---
-
 # Feature — Custom Domain Cutover (carded.io)
 
 ## Background

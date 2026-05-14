@@ -1,3 +1,6 @@
+---
+github_issue: 3
+---
 # Carded MVP Plan
 
 **Status:** Draft — awaiting Graham's sign-off before any code is written.  

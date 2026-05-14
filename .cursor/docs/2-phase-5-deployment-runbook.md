@@ -1,9 +1,11 @@
 ---
+description: Step-by-step runbook for deploying Carded to Render with a Cloudflare
+  DNS cutover to carded.io. Manual steps that require Graham's Render and Cloudflare
+  accounts.
+github_issue: 9
 name: phase-5-deployment-runbook
-description: Step-by-step runbook for deploying Carded to Render with a Cloudflare DNS cutover to carded.io. Manual steps that require Graham's Render and Cloudflare accounts.
 type: runbook
 ---
-
 # Phase 5 — Render + Cloudflare Deployment Runbook
 
 **Status (2026-05-13):** Live on `*.onrender.com`. Custom domain (`carded.io`) cutover **deferred** — tracked in `.cursor/features/1-custom-domain-carded-io-cutover.md`. Steps 1, 2, and 4 below were completed; Step 3 (Cloudflare DNS) is the deferred work and remains documented here as the operator reference for when Graham picks it up.

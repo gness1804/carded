@@ -1,3 +1,6 @@
+---
+github_issue: 8
+---
 # Interface Contract — Carded Phase 4
 
 This document is the authoritative contract for the Phase 4 parallel build (Kristy on templates/frontend, Prudvi on `app.py`). Do not change endpoint shapes, error payloads, or cookie behavior without updating this document and getting approval from Graham.

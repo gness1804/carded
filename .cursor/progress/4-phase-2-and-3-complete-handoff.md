@@ -1,9 +1,11 @@
 ---
+description: Captures Phase 2/3 completion state, what's on disk, the commit, this
+  session's sub-agent stall, the new global CLAUDE.md rules added in this session,
+  and exact pickup points for the Phase 4 session.
+github_issue: 6
 name: Phase 2 + Phase 3 Complete — Handoff to Phase 4
-description: Captures Phase 2/3 completion state, what's on disk, the commit, this session's sub-agent stall, the new global CLAUDE.md rules added in this session, and exact pickup points for the Phase 4 session.
 type: handoff
 ---
-
 # Phase 2 + Phase 3 Complete — Handoff for Next Session
 
 **Date:** 2026-05-11

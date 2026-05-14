@@ -1,9 +1,10 @@
 ---
+description: Final, signed-off-pending plan for Carded MVP. Incorporates Graham's
+  decisions on domain, BYOK, HEIC, camera default, parallel build, and feature branch.
+github_issue: 4
 name: Carded MVP Plan (Final)
-description: Final, signed-off-pending plan for Carded MVP. Incorporates Graham's decisions on domain, BYOK, HEIC, camera default, parallel build, and feature branch.
 type: handoff
 ---
-
 # Carded MVP Plan (Final)
 
 **Status:** Final draft — awaiting Graham's green-light on Phase 1 kickoff.
