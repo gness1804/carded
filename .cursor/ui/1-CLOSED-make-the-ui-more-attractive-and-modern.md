@@ -14,4 +14,6 @@ Right now, the UI for this application is very bare bones. It does the job, but 
 ## Acceptance criteria
 
 - The application will look more modern and attractive, suitable for a professional portfolio piece. 
-- There should also be at least one logo or icon on the page. 
+- There should also be at least one logo or icon on the page.
+
+<!-- CLOSED -->
