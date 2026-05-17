@@ -5,19 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Carded{% endblock %}</title>
 
-  {# Apply the saved theme before paint to avoid a flash, and remember the
-     resolved theme on <html> so the toggle button can label itself correctly
-     on first paint without a flicker. #}
-  <script>
-    (function () {
-      try {
-        var saved = localStorage.getItem('carded-theme');
-        var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-        if (theme === 'light') document.documentElement.classList.add('light');
-        document.documentElement.dataset.themeResolved = theme;
-      } catch (e) {}
-    })();
-  </script>
+  {# Pre-paint theme resolution. Must be a synchronous external script
+     (no defer/async) so it executes before the stylesheets parse and
+     before first paint, avoiding a light/dark flash. CSP forbids inline
+     scripts, hence the external file. #}
+  <script src="/static/js/theme-init.js"></script>
 
   <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="stylesheet" href="/static/css/style.css">
@@ -35,6 +27,7 @@
         id="theme-toggle"
         class="theme-toggle"
         aria-label="Toggle color theme"
+        aria-pressed="false"
         title="Toggle color theme"
       >
         <svg class="theme-toggle__icon theme-toggle__icon--sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
