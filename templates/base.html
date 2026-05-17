@@ -9,16 +9,16 @@
      (no defer/async) so it executes before the stylesheets parse and
      before first paint, avoiding a light/dark flash. CSP forbids inline
      scripts, hence the external file. #}
-  <script src="/static/js/theme-init.js"></script>
+  <script src="/static/js/theme-init.js?v={{ app_version }}"></script>
 
-  <link rel="stylesheet" href="/static/css/tokens.css">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/tokens.css?v={{ app_version }}">
+  <link rel="stylesheet" href="/static/css/style.css?v={{ app_version }}">
 </head>
 <body>
   <header class="site-header">
     <div class="header-inner">
       <a href="/" class="brand" aria-label="Carded home">
-        <img src="/static/img/logo-card.svg" alt="" class="brand__logo" aria-hidden="true">
+        <img src="/static/img/logo-card.svg?v={{ app_version }}" alt="" class="brand__logo" aria-hidden="true">
         <span class="wordmark">Carded</span>
       </a>
       <div class="header-spacer"></div>
@@ -49,6 +49,6 @@
     <span class="site-footer__version">Carded v{{ app_version }}</span>
   </footer>
 
-  <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/app.js?v={{ app_version }}" defer></script>
 </body>
 </html>
