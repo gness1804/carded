@@ -1,0 +1,345 @@
+/* =========================================================
+   Graham Nessler Design System — colors_and_type.css
+   Personal brand: black, silver, red. Dark slate-blue alt.
+   Dark theme is the default; .light overrides.
+   ========================================================= */
+
+/* ---------- 1. Type ramp (web fonts via Google Fonts) -----
+   Inter = body / UI sans. Lora = serif accent for headlines
+   and historical / editorial flourishes (nod to Graham's
+   scholarly past). JetBrains Mono = monospace for code.
+   --------------------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@0,500;0,600;0,700;1,500&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+:root {
+  /* ---- Brand colors ---- */
+  --brand-red:           #DC2626;  /* destructive ONLY. tailwind red-600 */
+  --brand-red-hover:     #B91C1C;  /* destructive press / hover */
+  --brand-red-soft:      #EF4444;  /* lighter red for tinted states */
+  --brand-red-ink:       #F87171;  /* on-dark legible red text */
+
+  --brand-blue:          #2563EB;  /* the chromatic accent. blue-600.
+                                       5.17:1 on white text, 4.6:1 on black bg — AA */
+  --brand-blue-hover:    #1D4ED8;  /* blue-700 */
+  --brand-blue-ink:      #93C5FD;  /* on-dark legible blue text */
+
+  --brand-black:         #0A0A0A;  /* near-black: the "void" surface */
+  --brand-night:         #0F172A;  /* slate-900: dark-blue alternate */
+  --brand-night-2:       #1E293B;  /* slate-800: dark-blue elevated */
+
+  --silver-100:          #F5F5F5;  /* near-white */
+  --silver-200:          #E5E5E5;
+  --silver-300:          #D1D5DB;  /* signature silver (cat fur) */
+  --silver-400:          #A3A3A3;  /* muted text on dark */
+  --silver-500:          #737373;  /* dim text */
+  --silver-600:          #525252;  /* subtle borders on light */
+  --silver-700:          #404040;  /* dividers on dark */
+  --silver-800:          #262626;  /* card border on dark */
+  --silver-900:          #171717;  /* elevated surface on dark */
+
+  /* ---- Semantic surfaces (DARK = default) ---- */
+  --bg:                  var(--brand-black);
+  --bg-elev-1:           var(--silver-900);   /* cards */
+  --bg-elev-2:           var(--silver-800);   /* inputs / chips */
+  --bg-tint-red:         rgba(220, 38, 38, 0.10);
+  --bg-tint-blue:        rgba(15, 23, 42, 0.40);
+
+  /* ---- Semantic text ---- */
+  --fg:                  var(--silver-100);
+  --fg-muted:            var(--silver-400);
+  --fg-dim:              var(--silver-500);
+  --fg-inverse:          var(--brand-black);
+  --fg-link:             var(--brand-red-ink);
+  --fg-link-hover:       var(--silver-300);
+  --fg-on-accent:        #FFFFFF;
+
+  /* ---- Borders & dividers ---- */
+  --border:              var(--silver-800);
+  --border-strong:       var(--silver-700);
+  --border-accent:       var(--brand-red);
+  --ring:                rgba(220, 38, 38, 0.45);
+
+  /* ---- Status colors (used sparingly) ---- */
+  --ok:      #4ADE80;
+  --ok-bg:   rgba(20, 83, 45, 0.35);
+  --warn:    #F59E0B;
+  --warn-bg: rgba(120, 53, 15, 0.35);
+  --danger:  var(--brand-red);
+  --info:    #60A5FA;
+
+  /* ---- Semantic actions ----
+     Primary = silver-on-dark (default CTA, matches the brand mark).
+     Accent  = brand blue (use when you need a chromatic CTA, never on the
+               same screen as the primary).
+     Destructive = brand red. Reserved for irreversible actions only —
+                   delete, remove key, clear history. Never the default. */
+  --action-primary-bg:        var(--silver-100);   /* near-white */
+  --action-primary-bg-hover:  var(--silver-300);
+  --action-primary-fg:        var(--brand-black);
+
+  --action-accent-bg:         var(--brand-blue);
+  --action-accent-bg-hover:   var(--brand-blue-hover);
+  --action-accent-fg:         #FFFFFF;
+
+  --action-destructive-bg:    var(--brand-red);
+  --action-destructive-bg-hover: var(--brand-red-hover);
+  --action-destructive-fg:    #FFFFFF;
+
+  /* ---- Type tokens ---- */
+  --font-sans:  'Inter', ui-sans-serif, system-ui, -apple-system,
+                'Segoe UI', Roboto, sans-serif;
+  --font-serif: 'Lora', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, SFMono-Regular,
+                Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+
+  /* fluid scale, clamps for responsive headers */
+  --fs-display: clamp(2.5rem, 1.4rem + 3.2vw, 4rem);   /* 40–64 */
+  --fs-h1:      clamp(2rem,   1.4rem + 1.8vw, 2.75rem); /* 32–44 */
+  --fs-h2:      clamp(1.5rem, 1.2rem + 1.0vw, 2rem);    /* 24–32 */
+  --fs-h3:      1.25rem;   /* 20 */
+  --fs-h4:      1.125rem;  /* 18 */
+  --fs-body:    1rem;      /* 16 */
+  --fs-small:   0.875rem;  /* 14 */
+  --fs-xs:      0.75rem;   /* 12 */
+
+  --lh-tight:   1.15;
+  --lh-snug:    1.3;
+  --lh-body:    1.6;
+  --lh-loose:   1.75;
+
+  --tracking-tight: -0.02em;
+  --tracking-snug:  -0.01em;
+  --tracking-wide:   0.04em;
+
+  /* ---- Spacing ladder (4-pt) ---- */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+
+  /* ---- Radii ---- */
+  --radius-xs:  2px;
+  --radius-sm:  4px;
+  --radius-md:  6px;
+  --radius-lg:  8px;
+  --radius-xl:  12px;
+  --radius-2xl: 16px;
+  --radius-pill: 999px;
+
+  /* ---- Elevation (intentionally restrained) ---- */
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-2: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-3: 0 10px 30px rgba(0,0,0,0.55), 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-glow-red: 0 0 0 1px var(--brand-red), 0 6px 24px rgba(220,38,38,0.25);
+
+  /* ---- Motion ---- */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out:      cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast:   120ms;
+  --dur-base:   200ms;
+  --dur-slow:   320ms;
+
+  color-scheme: dark;
+}
+
+/* ---------- LIGHT THEME OVERRIDES ---------------------- */
+.light, html.light, [data-theme="light"] {
+  --bg:                  #FFFFFF;
+  --bg-elev-1:           #FAFAFA;
+  --bg-elev-2:           #F5F5F5;
+  --bg-tint-red:         rgba(220, 38, 38, 0.06);
+
+  --fg:                  var(--brand-black);
+  --fg-muted:            #4B5563;          /* slate-600 */
+  --fg-dim:              #6B7280;          /* slate-500 */
+  --fg-link:             var(--brand-red-hover);
+  --fg-link-hover:       #4B5563;
+
+  --border:              #E5E7EB;          /* slate-200 */
+  --border-strong:       #D1D5DB;          /* silver-300 */
+  --ring:                rgba(220,38,38,0.3);
+
+  /* On light, primary inverts to black-on-white so it has real contrast. */
+  --action-primary-bg:        var(--brand-black);
+  --action-primary-bg-hover:  #1F2937;   /* slate-800 */
+  --action-primary-fg:        #FFFFFF;
+
+  --shadow-1: 0 1px 2px rgba(15,23,42,0.06);
+  --shadow-2: 0 6px 18px rgba(15,23,42,0.08);
+  --shadow-3: 0 18px 40px rgba(15,23,42,0.10), 0 2px 6px rgba(15,23,42,0.06);
+
+  color-scheme: light;
+}
+
+/* ---------- NIGHT (slate-blue) THEME --------------------
+   Same as dark but the canvas swaps to navy. Useful for
+   "history" / editorial views — the portfolio's accent. */
+.night, [data-theme="night"] {
+  --bg:                  var(--brand-night);
+  --bg-elev-1:           var(--brand-night-2);
+  --bg-elev-2:           #334155;          /* slate-700 */
+  --border:              #334155;
+  --border-strong:       #475569;
+  color-scheme: dark;
+}
+
+/* ========================================================
+   2. SEMANTIC ELEMENT STYLES
+   These are intended to be applied via class OR cascaded
+   onto raw HTML if used as a base stylesheet.
+   ======================================================== */
+
+html {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 var(--fs-body)/var(--lh-body) var(--font-sans);
+}
+
+/* --- Headings --- */
+.display, h1.display {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: var(--fs-display);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg);
+  margin: 0 0 var(--space-6);
+}
+
+h1, .h1 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: var(--fs-h1);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  margin: 0 0 var(--space-4);
+}
+
+h2, .h2 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: var(--fs-h2);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-snug);
+  margin: var(--space-8) 0 var(--space-3);
+}
+
+h3, .h3 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-h3);
+  line-height: var(--lh-snug);
+  margin: var(--space-6) 0 var(--space-2);
+}
+
+h4, .h4 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-h4);
+  line-height: var(--lh-snug);
+  margin: var(--space-4) 0 var(--space-2);
+}
+
+p, .p {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  margin: 0 0 var(--space-4);
+  color: var(--fg);
+  text-wrap: pretty;
+}
+
+.lede {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 1.25rem;
+  line-height: var(--lh-loose);
+  color: var(--fg-muted);
+}
+
+small, .small {
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+}
+
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--brand-red);
+}
+
+/* --- Links --- */
+a {
+  color: var(--fg-link);
+  text-decoration: none;
+  transition: color var(--dur-base) var(--ease-standard);
+}
+a:hover { color: var(--fg-link-hover); }
+a:focus-visible {
+  outline: 2px solid var(--brand-red);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* --- Code --- */
+code, kbd, samp, pre {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+code {
+  background: var(--bg-elev-2);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  color: var(--silver-200);
+}
+pre {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  overflow-x: auto;
+  line-height: 1.5;
+}
+pre code { background: transparent; padding: 0; }
+
+/* --- Blockquote (editorial / historian voice) --- */
+blockquote {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.125rem;
+  line-height: var(--lh-loose);
+  color: var(--fg-muted);
+  border-left: 3px solid var(--brand-red);
+  padding: var(--space-2) 0 var(--space-2) var(--space-5);
+  margin: var(--space-6) 0;
+}
+
+/* --- HR --- */
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-8) 0;
+}
+
+/* --- Selection --- */
+::selection { background: var(--brand-red); color: #fff; }

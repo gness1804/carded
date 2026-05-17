@@ -679,9 +679,45 @@ function initEvents() {
 }
 
 /* ============================================================
+   Theme toggle
+   ------------------------------------------------------------
+   The initial class is applied by an inline script in base.html
+   (pre-paint, to avoid a flash). This handler only swaps the
+   class and persists the user's choice. localStorage may be
+   unavailable (private browsing, blocked storage) — fail open.
+   ============================================================ */
+function initThemeToggle() {
+  const toggle = document.getElementById('theme-toggle');
+  if (!toggle) return;
+
+  function syncLabel(isLight) {
+    toggle.setAttribute(
+      'aria-label',
+      isLight ? 'Switch to dark theme' : 'Switch to light theme'
+    );
+    toggle.setAttribute('aria-pressed', String(isLight));
+  }
+
+  syncLabel(document.documentElement.classList.contains('light'));
+
+  toggle.addEventListener('click', function () {
+    const root = document.documentElement;
+    const nextLight = !root.classList.contains('light');
+    root.classList.toggle('light', nextLight);
+    syncLabel(nextLight);
+    try {
+      localStorage.setItem('carded-theme', nextLight ? 'light' : 'dark');
+    } catch (e) {
+      /* storage unavailable — preference is session-only */
+    }
+  });
+}
+
+/* ============================================================
    Boot
    ============================================================ */
 document.addEventListener('DOMContentLoaded', function () {
   initRefs();
   initEvents();
+  initThemeToggle();
 });
