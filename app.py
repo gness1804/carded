@@ -47,7 +47,7 @@ from vcard_builder import build_vcf, vcf_filename
 from google_csv_builder import build_google_csv, csv_filename
 
 # Keep in sync with pyproject.toml [project] version. Surfaced via /health.
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 logger = logging.getLogger(__name__)
 
