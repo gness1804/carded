@@ -44,3 +44,5 @@ Extraction returned incorrect contact data for a real-world business card on the
 - Real card photograph under typical mobile-capture conditions (no special lighting or framing)
 
 ## Acceptance criteria
+
+<!-- DONE -->

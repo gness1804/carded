@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs><clipPath id="fc"><circle cx="16" cy="18" r="11"></circle></clipPath></defs>
+  <polygon points="6,12 9,3 13,12" fill="#d1d5db" stroke="#0a0a0a" stroke-width="1"></polygon>
+  <polygon points="19,12 23,3 26,12" fill="#d1d5db" stroke="#0a0a0a" stroke-width="1"></polygon>
+  <circle cx="16" cy="18" r="11" fill="#d1d5db" stroke="#0a0a0a" stroke-width="1"></circle>
+  <rect x="5" y="11" width="22" height="5" fill="#d1d5db" clip-path="url(#fc)"></rect>
+  <rect x="5" y="16" width="22" height="5" fill="#0a0a0a" clip-path="url(#fc)"></rect>
+  <rect x="5" y="21" width="22" height="8" fill="#dc2626" clip-path="url(#fc)"></rect>
+  <g stroke="#0a0a0a" stroke-width="0.6" stroke-linecap="round">
+    <line x1="14" y1="23" x2="3" y2="20.5"></line>
+    <line x1="14" y1="23" x2="2.5" y2="23"></line>
+    <line x1="14" y1="23" x2="3" y2="25.5"></line>
+    <line x1="18" y1="23" x2="29" y2="20.5"></line>
+    <line x1="18" y1="23" x2="29.5" y2="23"></line>
+    <line x1="18" y1="23" x2="29" y2="25.5"></line>
+  </g>
+  <circle cx="16" cy="18" r="11" fill="none" stroke="#0a0a0a" stroke-width="1"></circle>
+</svg>

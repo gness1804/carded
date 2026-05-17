@@ -27,11 +27,15 @@
     class="key-indicator{% if not has_session %} key-indicator--hidden{% endif %}"
     id="key-indicator"
   >
-    <span class="key-indicator__icon" aria-hidden="true">&#10003;</span>
+    <span class="key-indicator__icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+    </span>
     <span class="key-indicator__label">Key set</span>
     <span class="key-indicator__mask" id="key-mask">{{ masked_key or '' }}</span>
     <button
-      class="btn btn--ghost btn--sm"
+      class="btn btn--destructive btn--sm"
       id="change-key-btn"
       type="button"
       aria-label="Change API key"
@@ -139,10 +143,16 @@
       <p class="preview-area__filename" id="preview-filename"></p>
       <button
         type="button"
-        class="btn btn--ghost btn--sm preview-area__clear"
+        class="btn btn--destructive btn--sm preview-area__clear"
         id="clear-file-btn"
         aria-label="Remove selected image"
-      >&#x2715; Remove</button>
+      >
+        <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+        Remove
+      </button>
     </div>
 
     <button
