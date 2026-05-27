@@ -2,7 +2,9 @@
 
 Carded scans a business card image and extracts structured contact information using Claude's vision model (via BAML). Extracted data can be downloaded as a vCard (.vcf) for import into Apple Contacts, Google Contacts, or any vCard-compatible app, or as a Google Contacts CSV.
 
-**Status: live on Render (`*.onrender.com`).** Custom domain cutover to `carded.io` deferred — see `.cursor/features/1-custom-domain-carded-io-cutover.md`.
+**Live at [carded.onrender.com](https://carded.onrender.com/).** Custom domain cutover to `carded.io` deferred — see `.cursor/features/1-custom-domain-carded-io-cutover.md`.
+
+![Carded — scan a business card and extract structured contact info](docs/screenshot.png)
 
 ## Quickstart
 
