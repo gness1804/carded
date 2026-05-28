@@ -123,3 +123,5 @@ Both phases are independent — can run in parallel sessions.
 ---
 
 *End of handoff. Resume Phases 5 and 6 from the Todoist tasks listed above. Project is in a good state — Graham confirmed the local app works end-to-end after the polish session.*
+
+<!-- DONE -->

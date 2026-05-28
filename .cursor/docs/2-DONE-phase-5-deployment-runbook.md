@@ -133,3 +133,5 @@ If the live deploy misbehaves:
 - CI/CD beyond Render's built-in auto-deploy from Git. If you want PR-preview environments or staging, that's a follow-on.
 - Observability / Sentry / metrics. Render gives you basic logs + per-deploy metrics; anything richer is out of scope for MVP.
 - Backups — there's no persistent state in this app (BYOK lives in user cookies; download tokens are in-process). Nothing to back up.
+
+<!-- DONE -->

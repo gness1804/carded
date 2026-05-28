@@ -613,3 +613,5 @@ CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
 ---
 
 *End of plan. Awaiting Graham's review and sign-off.*
+
+<!-- DONE -->
