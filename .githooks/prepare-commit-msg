@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+#
+# Git prepare-commit-msg hook (installed/updated by the /pre-commit skill).
+# Re-run /pre-commit to regenerate or update this file.
+#
+# WHAT IT DOES: hard-stops a commit that is being made from a STALE
+# commit-message draft, and warns when the draft no longer matches the index.
+#
+# WHY IT EXISTS: the agent-hands-the-commit-to-the-user flow writes a proposed
+# message to $GIT_DIR/COMMIT_MSG_DRAFT, and the user later runs
+# `git commit -F .git/COMMIT_MSG_DRAFT` in their own terminal. Between those two
+# moments the repo can move underneath the draft — a commit lands, or files are
+# staged/unstaged. The draft then describes something other than what is being
+# committed, and nothing surfaces the mismatch: the commit just succeeds with a
+# wrong message. Hit for real on 2026-07-29 in aws-resources. The root cause is
+# that drafts get written from conversational memory instead of from the staged
+# index; this hook turns the resulting silent mismatch into a hard stop.
+#
+# HOW IT WORKS: whoever writes the draft also writes a two-line sidecar,
+# $GIT_DIR/COMMIT_MSG_DRAFT.base:
+#     line 1: the HEAD sha the draft was composed against ("EMPTY" if unborn)
+#     line 2: the index tree sha (`git write-tree`) at that moment — optional
+# At commit time this hook BLOCKS when line 1 no longer matches HEAD, and WARNS
+# when line 2 no longer matches the current index. The asymmetry is deliberate:
+# an intervening commit means the draft describes history, which is always
+# wrong; a changed index is often just "I staged one more file", so blocking
+# there would train the user to reach for the bypass and hollow out the control.
+#
+# The stamp lives in a SIDECAR FILE, not inside the draft, and that is
+# deliberate: `git commit -F <file>` uses cleanup mode `whitespace`, which does
+# NOT strip "#" comment lines (verified on git 2.49.0). A "# base: <sha>" line
+# inside the draft would therefore land verbatim in the commit message.
+#
+# BYPASS: ALLOW_STALE_DRAFT=1 git commit -F .git/COMMIT_MSG_DRAFT
+# NOTE that `git commit --no-verify` does NOT bypass this hook — --no-verify
+# skips pre-commit and commit-msg only (verified on git 2.49.0). The env var is
+# the escape hatch.
+
+set -uo pipefail
+
+msg_file="${1:-}"
+msg_source="${2:-}"
+
+[ -n "$msg_file" ] && [ -r "$msg_file" ] || exit 0
+
+git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
+[ -n "$git_dir" ] || exit 0
+
+draft="$git_dir/COMMIT_MSG_DRAFT"
+base_file="$git_dir/COMMIT_MSG_DRAFT.base"
+
+# No draft at all means this repo isn't using the draft flow. Stay out of the way.
+[ -r "$draft" ] || exit 0
+
+# Only message sources where the draft could plausibly be in play:
+#   "message"  -> `-m` or `-F`. This is the draft flow, and it is ALSO what
+#                 `git commit --amend -F <file>` reports (verified on git
+#                 2.49.0) — amend is handled explicitly further down, not here.
+#   ""         -> editor-driven commit. Retained for completeness only: this
+#                 hook runs BEFORE the editor, so $msg_file holds git's template
+#                 rather than the draft and the content match below never fires.
+#                 A draft pasted into the editor by hand is therefore not
+#                 covered, and cannot be.
+# Skipped: "commit" (--amend --no-edit / -c / -C reuse an existing message),
+# "merge", "squash", "template".
+case "$msg_source" in
+  message | '') ;;
+  *) exit 0 ;;
+esac
+
+# --- Is this commit actually using the draft? --------------------------------
+# Normalization trims trailing whitespace per line and surrounding blank lines.
+# Comment lines are deliberately NOT stripped in the primary comparison: `-F`
+# preserves them verbatim, so draft and message agree with comments intact.
+# Stripping them from both sides would make a draft of "feat: x" + "# note"
+# collide with an unrelated `git commit -m "feat: x"` and block it.
+normalize() {
+  awk '
+    { sub(/[[:space:]]+$/, ""); buf[++n] = $0 }
+    END {
+      first = 1;   while (first <= n && buf[first] == "") first++
+      last  = n;   while (last >= first && buf[last] == "") last--
+      for (i = first; i <= last; i++) print buf[i]
+    }
+  ' < "$1"
+}
+
+strip_comments() { printf '%s\n' "$1" | sed '/^#/d' | awk '
+  { buf[++n] = $0 }
+  END {
+    first = 1;   while (first <= n && buf[first] == "") first++
+    last  = n;   while (last >= first && buf[last] == "") last--
+    for (i = first; i <= last; i++) print buf[i]
+  }
+'; }
+
+draft_norm="$(normalize "$draft")"
+msg_norm="$(normalize "$msg_file")"
+
+# An empty draft would match an empty editor template and fire spuriously.
+[ -n "$draft_norm" ] || exit 0
+
+using_draft=0
+if [ "$draft_norm" = "$msg_norm" ]; then
+  using_draft=1
+elif ! printf '%s\n' "$draft_norm" | grep -q '^#'; then
+  # Fallback for configurations where git appends its own "#" template lines to
+  # the message file. Applied ONLY when the draft itself contains no comment
+  # lines, so stripping can affect the message side alone and cannot cause the
+  # collision described above.
+  [ "$(strip_comments "$msg_norm")" = "$draft_norm" ] && using_draft=1
+fi
+
+[ "$using_draft" -eq 1 ] || exit 0
+
+# --- The draft IS in use. Now verify the stamp. ------------------------------
+if [ ! -r "$base_file" ]; then
+  # Fail open, but never silently: this is precisely the situation the guard
+  # exists for, and an unstamped draft opts out of it invisibly otherwise.
+  {
+    echo ""
+    echo "prepare-commit-msg: WARNING — committing from $draft, but there is no"
+    echo "  stamp at $base_file, so the stale-draft check CANNOT run."
+    echo "  Write drafts with commit_draft.py so they are stamped:"
+    echo "    python3 ~/.claude/skills/pre-commit/references/commit_draft.py --message '...'"
+    echo ""
+  } >&2
+  exit 0
+fi
+
+if [ "${ALLOW_STALE_DRAFT:-}" = "1" ]; then
+  echo "prepare-commit-msg: stale-draft check skipped (ALLOW_STALE_DRAFT=1)." >&2
+  exit 0
+fi
+
+# Line 1: HEAD sha. Line 2 (optional): index tree sha.
+recorded_raw="$(sed -n '1p' "$base_file" | tr -d '[:space:]')"
+recorded_tree="$(sed -n '2p' "$base_file" | tr -d '[:space:]')"
+[ -n "$recorded_raw" ] || exit 0
+
+# Resolve to a full sha so a short sha in the sidecar still compares correctly.
+# "EMPTY" is the sentinel for a draft written against an unborn HEAD.
+if [ "$recorded_raw" = "EMPTY" ]; then
+  recorded="EMPTY"
+else
+  recorded="$(git rev-parse --verify --quiet "${recorded_raw}^{commit}" 2>/dev/null || printf '%s' "$recorded_raw")"
+fi
+current="$(git rev-parse --verify --quiet HEAD 2>/dev/null || printf 'EMPTY')"
+
+# --- Output hygiene ----------------------------------------------------------
+# This hook's stderr is routinely captured (CI logs, agent transcripts,
+# scrollback), so it is a real publication sink. Everything variable that gets
+# printed — commit subjects AND file paths — goes through emit_scanned().
+#
+# Paths are included deliberately. An earlier version scanned only subjects, on
+# the reasoning that filenames "cannot carry file contents". That was wrong in
+# the one way that matters: AWS embeds the account ID directly in bucket names,
+# so `aws-cloudtrail-logs-<id>-us-east-2` is a filename that IS an identifier —
+# the exact shape scan_identifiers.py was written for.
+SCANNER=""
+for candidate in \
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scan_identifiers.py" \
+  "$HOME/.claude/skills/pre-commit/references/scan_identifiers.py"; do
+  [ -r "$candidate" ] && { SCANNER="$candidate"; break; }
+done
+
+# Print text only if the identifier scan clears it. Withhold when the scan flags
+# it OR when the scan cannot run at all — a missing scanner must not silently
+# downgrade to printing unscanned content, which is exactly the bug the first
+# version of this had: the `-n "$SCANNER"` guard fell through to the unscanned
+# branch when the scanner was absent.
+emit_scanned() {
+  local text="$1" label="$2" count
+  if [ -z "$text" ]; then
+    echo "    (none)"
+    return 0
+  fi
+  if [ -n "$SCANNER" ] && printf '%s\n' "$text" \
+    | python3 "$SCANNER" --stdin --label "$label" >/dev/null 2>&1; then
+    printf '%s\n' "$text" | sed 's/^/    /'
+    return 0
+  fi
+  count="$(printf '%s\n' "$text" | grep -c . || true)"
+  if [ -z "$SCANNER" ]; then
+    echo "    ($count line(s) withheld — the identifier scanner was not found,"
+    echo "     so this output could not be cleared for printing)"
+  else
+    echo "    ($count line(s) withheld — the identifier scan flagged them, and"
+    echo "     this output stream may be captured)"
+  fi
+}
+
+# --- Index drift: warn, never block ------------------------------------------
+# Checked before the HEAD comparison so the warning still surfaces on the paths
+# that exit 0 below.
+warn_index_drift() {
+  [ -n "$recorded_tree" ] || return 0
+  local now_tree
+  now_tree="$(git write-tree 2>/dev/null || true)"   # empty if the index is unmerged
+  [ -n "$now_tree" ] || return 0
+  [ "$now_tree" = "$recorded_tree" ] && return 0
+  {
+    echo ""
+    echo "prepare-commit-msg: WARNING — the staged index changed since this draft"
+    echo "  was written. The message may not describe what you are committing."
+    echo ""
+    echo "  What is staged now:"
+    echo ""
+    emit_scanned "$(git diff --cached --stat 2>/dev/null || true)" 'staged-paths'
+    echo ""
+    echo "  Committing anyway (this is a warning, not a block)."
+    echo ""
+  } >&2
+}
+
+# --- Amend using the draft that produced HEAD is legitimate ------------------
+# `git commit --amend -F <draft>` reports source "message", indistinguishable
+# from a fresh -F commit. Allow it when the draft is demonstrably the one that
+# created the commit being amended: HEAD's own message equals the draft AND the
+# stamp equals HEAD's parent.
+#
+# KNOWN LIMIT, accepted deliberately: re-running the same command against NEW
+# work is indistinguishable from a legitimate amend using only hook state, so
+# that case passes this check. The index-drift warning above is what surfaces
+# it — which is why that warning must never be removed as redundant.
+if [ "$recorded" != "$current" ] && [ "$current" != "EMPTY" ]; then
+  # NOT the "EMPTY" sentinel: that means "unborn HEAD" on the recorded side, and
+  # reusing it here would make a draft stamped EMPTY match any commit that
+  # merely lacks a reachable parent — a root commit, or a shallow-clone graft
+  # boundary. A value derived from $current can collide with neither.
+  head_parent="$(git rev-parse --verify --quiet 'HEAD^' 2>/dev/null || printf 'NOPARENT-%s' "$current")"
+  if [ "$recorded" = "$head_parent" ]; then
+    head_msg_norm="$(git log -1 --format=%B HEAD 2>/dev/null | awk '
+      { sub(/[[:space:]]+$/, ""); buf[++n] = $0 }
+      END {
+        first = 1;   while (first <= n && buf[first] == "") first++
+        last  = n;   while (last >= first && buf[last] == "") last--
+        for (i = first; i <= last; i++) print buf[i]
+      }')"
+    if [ "$head_msg_norm" = "$draft_norm" ]; then
+      warn_index_drift
+      exit 0
+    fi
+  fi
+fi
+
+if [ "$recorded" = "$current" ]; then
+  warn_index_drift
+  exit 0
+fi
+
+# --- Stale. Abort, and show enough to rewrite the message immediately. -------
+{
+  echo ""
+  echo "prepare-commit-msg: BLOCKED — this commit message draft is STALE."
+  echo ""
+  echo "  The draft at $draft was written against a different HEAD than the one"
+  echo "  you are committing onto, so it very likely describes work that has"
+  echo "  already landed."
+  echo ""
+  echo "    draft written against : $recorded"
+  echo "    HEAD is now           : $current"
+  echo ""
+  if [ "$recorded" != "EMPTY" ] && [ "$current" != "EMPTY" ] \
+    && git merge-base --is-ancestor "$recorded" "$current" 2>/dev/null; then
+    echo "  Commits that landed in between:"
+    emit_scanned "$(git log --oneline --no-decorate "$recorded..$current" 2>/dev/null || true)" \
+      'commit-subjects'
+    echo ""
+  fi
+  echo "  What is actually staged right now:"
+  echo ""
+  emit_scanned "$(git diff --cached --stat 2>/dev/null || true)" 'staged-paths'
+  echo ""
+  echo "  Working tree status:"
+  echo ""
+  emit_scanned "$(git status --short 2>/dev/null || true)" 'worktree-paths'
+  echo ""
+  echo "  FIX: rewrite the draft from the staged index above (not from memory),"
+  echo "  and restamp the sidecar in the same step:"
+  echo ""
+  echo "    python3 ~/.claude/skills/pre-commit/references/commit_draft.py --message '...'"
+  echo ""
+  echo "  If the draft really is correct as-is, bypass with:"
+  echo ""
+  echo "    ALLOW_STALE_DRAFT=1 git commit -F .git/COMMIT_MSG_DRAFT"
+  echo ""
+  echo "  (--no-verify does NOT bypass this hook; it skips pre-commit and"
+  echo "  commit-msg only.)"
+  echo ""
+} >&2
+
+exit 1

@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+#
+# Git pre-commit hook (installed/updated by the /pre-commit skill).
+# Re-run /pre-commit to regenerate or update this file.
+#
+# What it does:
+#   1. Blocks commits to protected branches (main/master/develop/prod/production).
+#   2. Blocks commits that introduce a "TEMP:" code comment.
+#   3. Runs the repo's linter(s) against changed files only (staged + dirty).
+#   4. Runs `cfs gh sync --non-interactive` when the repo is a GitHub project that uses CFS.
+#
+# Bypass intentionally with: git commit --no-verify
+
+set -uo pipefail
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- 1. Block commits on protected branches ----------------------------------
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || echo '')"
+# Lowercased so 'Main' / 'MASTER' cannot slip past a case-sensitive match.
+branch="$(printf '%s' "$branch" | tr '[:upper:]' '[:lower:]')"
+case "$branch" in
+  main|master|develop|prod|production)
+    echo "pre-commit: direct commits to '$branch' are blocked. Use a feature branch." >&2
+    exit 1
+    ;;
+esac
+
+# --- 2. Block new "TEMP:" code comments --------------------------------------
+# Scans only added lines in the staged diff. Matches a comment marker followed
+# by optional whitespace and the marker word, as spelled in TEMP_RE below.
+# Markers kept deliberately narrow (# // /* <!--) to avoid flagging SQL "--" and
+# Lisp ";" on ordinary lines. A regex can't tell a comment from a string literal,
+# so the marker word inside a quoted string can still trip it — rare; bypass if
+# needed.
+#
+# DO NOT "helpfully" restore literal examples here. This comment used to
+# illustrate the pattern with two real ones, which made the check match its own
+# source: adding this file to a repo blocked the very commit adding it. It never
+# surfaced while hooks lived untracked in .git/hooks/ and so were never staged;
+# moving them to a tracked .githooks/ is what exposed it. Describe the pattern,
+# do not write it.
+TEMP_RE='(//|#|/\*|<!--)[[:space:]]*TEMP:'
+added_lines="$(git diff --cached --unified=0 --no-color -- . | grep '^+' | grep -v '^+++' || true)"
+if printf '%s\n' "$added_lines" | grep -Eq "$TEMP_RE"; then
+  echo "pre-commit: found a 'TEMP:' comment in the staged changes:" >&2
+  printf '%s\n' "$added_lines" | grep -En "$TEMP_RE" >&2
+  echo "Remove the TEMP: comment(s) before committing (or use --no-verify to bypass)." >&2
+  exit 1
+fi
+
+# --- 3. Lint changed files ----------------------------------------------------
+# "Changed" = staged + unstaged-but-tracked-dirty files (Added/Copied/Modified/
+# Renamed). Linters run against the working-tree state of these files (not the
+# staged blob) — by design, so dirty unstaged edits are checked too. Untouched
+# code is never linted.
+changed_files="$(
+  {
+    git diff --name-only --diff-filter=ACMR
+    git diff --cached --name-only --diff-filter=ACMR
+  } | sort -u
+)"
+# Drop entries that no longer exist in the worktree (e.g. staged, then deleted),
+# since a linter can't read a missing file and would error out.
+changed_files="$(
+  printf '%s\n' "$changed_files" | while IFS= read -r f; do
+    [ -n "$f" ] && [ -e "$f" ] && printf '%s\n' "$f"
+  done
+)"
+
+# >>> LINTER SECTION (customized per repo by the /pre-commit skill) <<<
+# Generated BAML trees are excluded, matching this repo's previous hook.
+py_files="$(printf '%s\n' "$changed_files" \
+  | grep -E '\.py$' \
+  | grep -v '^baml_client/' \
+  | grep -v '^baml_src/' || true)"
+if [ -n "$py_files" ]; then
+  if command -v ruff >/dev/null 2>&1; then
+    printf '%s\n' "$py_files" | tr '\n' '\0' | xargs -0 ruff check || {
+      echo "pre-commit: ruff check failed. Fix the issues (or --no-verify to bypass)." >&2
+      exit 1
+    }
+  fi
+fi
+# >>> END LINTER SECTION <<<
+
+# --- 4. Sensitive-identifier scan --------------------------------------------
+# Blocks cloud identifiers from entering committed files.
+#
+# WHY THIS EXISTS: a CFS doc containing an AWS account ID, 15 access-key IDs, and
+# full ARNs was synced into a PUBLIC GitHub issue. It slipped through because the
+# usual secrets rules cover *secrets* (keys, passwords) in *script output* — an
+# account ID is an identifier, not a secret, and a committed doc is not output.
+# Nothing automated checked. This is that check.
+#
+# MUST run BEFORE the CFS sync below: the sync publishes doc bodies to GitHub, so
+# scanning afterwards would block the commit only after the content went public.
+#
+# Scans ADDED lines only, so pre-existing content never blocks an unrelated
+# commit. The account-ID rule matches ANY 12-digit run bounded by non-digits.
+# An earlier "must sit near the word account" rule was the central defect: it
+# waved through aws-cloudtrail-logs-<id>-us-east-2, which is how AWS names its
+# own buckets. Bare 12-digit runs are rare in prose (dates, versions, ports and
+# hashes are other lengths; epoch-seconds is 10 and epoch-millis is 13), so the
+# looser rule costs little. Documentation example IDs are excluded per match.
+#
+# Escape hatch: put the literal string `allow-identifier` on the same line.
+# Matching lives in scan_identifiers.py (same directory as this hook), a single
+# shared Python implementation. Three prior bash/ERE versions each shipped with
+# false negatives: exclusions had to be applied by editing the line before
+# matching, which destroyed adjacent real matches, and ERE cannot express the
+# digit-boundary lookarounds the account-ID rule needs.
+if [ -r "$HOOK_DIR/scan_identifiers.py" ]; then
+  python3 "$HOOK_DIR/scan_identifiers.py" --staged-diff || exit 1
+else
+  # Fail closed: a missing scanner must not silently disable the control.
+  echo "pre-commit: BLOCKED - $HOOK_DIR/scan_identifiers.py is missing or unreadable." >&2
+  echo "  The cloud-identifier scan cannot run, so the commit is refused rather than" >&2
+  echo "  silently proceeding unprotected. Restore it or use --no-verify knowingly." >&2
+  exit 1
+fi
+
+# --- 4b. gitleaks secret scan -------------------------------------------------
+# Division of labour: the scan above catches cloud IDENTIFIERS (account IDs,
+# ARNs, principal IDs), which gitleaks does not cover because they are not
+# secrets. gitleaks catches SECRETS (API keys, tokens, private keys). Regexes
+# alone cannot close this; both layers are needed.
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact --no-banner --exit-code 1 >/dev/null 2>&1; then
+    echo "pre-commit: BLOCKED — gitleaks found a secret in the staged changes." >&2
+    echo "  Re-run for detail (output is redacted): gitleaks protect --staged --redact --verbose" >&2
+    exit 1
+  fi
+else
+  echo "pre-commit: WARNING — gitleaks not installed; secret scanning SKIPPED." >&2
+  echo "  Install with: brew install gitleaks" >&2
+fi
+
+# --- 5. Sync CFS issues with GitHub (only when applicable) -------------------
+# Runs `cfs gh sync --non-interactive --strict` only if: gh CLI is installed,
+# cfs CLI is installed, the origin remote is a GitHub repo, and a .cursor
+# directory exists.
+#   --non-interactive resolves content conflicts deterministically (strategy
+#     'newer': whichever side changed most recently wins) so a routine commit
+#     never stalls on a conflict prompt in this non-TTY context. Conflicts that
+#     genuinely can't be auto-resolved (e.g. a new issue with no category label)
+#     are *deferred* with an advisory note, not blocked.
+#   --strict exits 1 only on real sync errors (GitHub API or file failures) and
+#     blocks the commit so they get fixed.
+# Note: older cfs versions (< 0.14) don't support --non-interactive; if the
+# sync fails with an "unknown option" style error, drop that flag (or upgrade
+# cfs). The /pre-commit skill asks before upgrading an existing hook to this
+# form.
+#
+# GOTCHA — "gh not authenticated" is usually NOT a logout. gh stores its token
+# in the macOS Keychain (`gh auth status` shows "(keyring)"). A sandboxed shell
+# — e.g. an AI coding agent's tool call — cannot reach the Keychain, so gh
+# reports "The token in keyring is invalid", which is indistinguishable from
+# being logged out. GPG/SSH commit signing fails the same way. If this sync
+# fails that way, the fix is that the USER runs the commit from their own
+# terminal — not the agent. Do NOT re-run `gh auth login`, do NOT disable the
+# agent's sandbox to work around it, do NOT add a `gh auth status` guard that
+# skips the sync (that trades a loud failure for silent CFS/GitHub drift), and
+# do NOT switch gh to plaintext token storage.
+#
+# VISIBILITY GUARD: `cfs gh sync` pushes CFS document BODIES verbatim into GitHub
+# issues, and an issue is exactly as public as its repo. A hardening doc — account
+# ID, 15 access-key IDs, ARNs, and the name of a bucket holding personal data —
+# was published this way because the repo was public and nothing surfaced that
+# fact. CFS docs *feel* local; they are not.
+#
+# So: refuse to sync when the repo is PUBLIC unless explicitly opted in by
+# creating .cursor/.allow-public-cfs-sync. This fails safe (skips publishing)
+# rather than failing closed (blocking the commit), because a public repo is a
+# legitimate configuration — it just should not silently publish planning docs.
+if command -v gh >/dev/null 2>&1 \
+  && command -v cfs >/dev/null 2>&1 \
+  && git remote get-url origin 2>/dev/null | grep -qi 'github' \
+  && [ -d .cursor ]; then
+  repo_visibility="$(gh repo view --json visibility -q .visibility 2>/dev/null || echo UNKNOWN)"
+  # Tested against KNOWN-SAFE values rather than against PUBLIC. The obvious
+  # form — `if [ "$v" = "PUBLIC" ]` — fails OPEN: when `gh` errors, rate-limits,
+  # or cannot reach the Keychain, visibility is UNKNOWN, which is not "PUBLIC",
+  # so control falls through to the else branch and publishes. That is exactly
+  # the case this guard exists for, since the Keychain failure is routine in a
+  # sandboxed agent shell. "I could not determine visibility" must mean "do not
+  # publish", which is what this inverted test gives.
+  if [ "$repo_visibility" != "PRIVATE" ] && [ "$repo_visibility" != "INTERNAL" ] \
+    && [ ! -f .cursor/.allow-public-cfs-sync ]; then
+    echo "pre-commit: SKIPPING 'cfs gh sync' — repo visibility is '$repo_visibility' (not confirmed private)." >&2
+    echo "  CFS syncs document bodies verbatim into GitHub issues, which inherit repo" >&2
+    echo "  visibility. Publishing planning/security docs to a public issue is rarely intended." >&2
+    echo "  If it IS intended here, opt in with: touch .cursor/.allow-public-cfs-sync" >&2
+  else
+    if ! cfs gh sync --non-interactive --strict; then
+      echo "pre-commit: 'cfs gh sync --non-interactive --strict' hit real sync errors — fix them (or commit with --no-verify) and rerun." >&2
+      exit 1
+    fi
+  fi
+fi
+
+exit 0

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#
+# Git commit-msg hook (installed/updated by the /pre-commit skill).
+# Re-run /pre-commit to regenerate or update this file.
+#
+# WHAT IT DOES: refuses a commit whose MESSAGE contains a cloud identifier —
+# an AWS account ID, ARN, access-key ID, or a PEM private-key header.
+#
+# WHY IT EXISTS: a commit message is a publication sink. It is pushed to GitHub
+# verbatim and is exactly as public as the repo, and unlike a file it cannot be
+# quietly corrected later — rewriting it means rewriting history. Yet neither
+# existing control sees it:
+#
+#   * pre-commit's `scan_identifiers.py --staged-diff` reads the staged DIFF,
+#     which is file content only;
+#   * `gitleaks protect --staged` likewise covers staged content only.
+#
+# So `git commit -m "chore: clean up account 123456789012"` reached GitHub
+# entirely unscanned. This is the same rule as the 2026-07-18 CFS-document
+# incident and the Todoist-task incident: identifiers leaking into a sink that
+# the existing rule was scoped too narrowly to cover. Third sink, same fix.
+#
+# That example ID is one of AWS's own documentation IDs, which
+# scan_identifiers.py exempts by design. It used to be a realistic-looking one,
+# which tripped the pre-commit scan on this very file the first time this hook
+# was committed — the control catching its own documentation.
+#
+# The COMMIT_MSG_DRAFT helper (commit_draft.py) scans the message it writes, but
+# that only covers messages that go through the draft flow. This hook is what
+# covers every other commit.
+#
+# Bypass intentionally with: git commit --no-verify
+# (Unlike prepare-commit-msg, --no-verify DOES skip this hook — it skips
+# pre-commit and commit-msg. That is acceptable: this is a guard against
+# accident, not against a determined author.)
+
+set -uo pipefail
+
+msg_file="${1:-}"
+[ -n "$msg_file" ] && [ -r "$msg_file" ] || exit 0
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+SCANNER=""
+for candidate in \
+  "$HOOK_DIR/scan_identifiers.py" \
+  "$HOME/.claude/skills/pre-commit/references/scan_identifiers.py"; do
+  [ -r "$candidate" ] && { SCANNER="$candidate"; break; }
+done
+
+if [ -z "$SCANNER" ]; then
+  # Fail closed, matching the pre-commit hook's posture for the same scanner: a
+  # missing scanner must not silently disable an identifier control.
+  echo "commit-msg: BLOCKED — scan_identifiers.py was not found, so the commit" >&2
+  echo "  message could not be scanned for cloud identifiers. Restore it, or" >&2
+  echo "  commit with --no-verify knowingly." >&2
+  exit 1
+fi
+
+# Scan the message as git will STORE it — comment lines included.
+#
+# This used to pipe through `sed '/^#/d'` first, on the reasoning that git strips
+# "#" lines anyway so flagging them would block on text that never reaches the
+# commit. That is true only for EDITOR-driven commits, where cleanup mode is
+# `strip`. For `-m` and `-F` there is no editor, cleanup mode is `whitespace`,
+# and "#" lines are preserved verbatim (verified on git 2.49.0 — the sibling
+# prepare-commit-msg hook documents this correctly and the two contradicted each
+# other). So the one flag that skipped the scan was also the flag that kept the
+# text, and `git commit -F` with an account ID on a "#" line committed clean.
+#
+# Not stripping them costs almost nothing: git's own template boilerplate holds
+# no identifiers, and a staged pathname that DOES hold one is now caught by the
+# pre-commit scan as well. The residual false positive — a "#" line an editor
+# commit would have discarded — is a blocked commit on text the author typed an
+# identifier into, which is the right way for this control to be wrong.
+#
+# NOTHING else is stripped either. The first attempt at this fix also removed
+# git's scissors line and everything below it, reasoning that `git commit -v`
+# puts the staged diff there and git discards it. That repeated the original
+# mistake exactly one layer down: git removes the scissors region only under
+# --cleanup=scissors or an editor-driven -v commit, so under -m/-F it is stored
+# verbatim, and an account ID below the marker committed clean (verified on git
+# 2.49.0). This hook cannot see the cleanup mode, so it cannot know which case
+# it is in. The only safe answer is to scan the whole message.
+#
+# Residual cost: `git commit -v` can now false-positive when the staged diff's
+# unchanged CONTEXT lines already contain an identifier. That is a blocked
+# commit the author retries without -v — the right way for this to be wrong.
+if ! python3 "$SCANNER" --stdin --label 'commit-message' < "$msg_file"; then
+  {
+    echo ""
+    echo "commit-msg: BLOCKED — the commit message contains a cloud identifier."
+    echo ""
+    echo "  A commit message is pushed to GitHub verbatim and is exactly as public"
+    echo "  as the repo. Unlike a file, it cannot be quietly fixed later: correcting"
+    echo "  it means rewriting history."
+    echo ""
+    echo "  Use a placeholder such as <AWS_ACCOUNT_ID> and resolve it at runtime:"
+    echo "    aws sts get-caller-identity --query Account --output text"
+    echo ""
+    echo "  Your message is preserved at: $msg_file"
+    echo ""
+  } >&2
+  exit 1
+fi
+
+exit 0
