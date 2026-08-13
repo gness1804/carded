@@ -83,8 +83,9 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 
-SCANNER_VERSION = "5.2.0"
+SCANNER_VERSION = "5.3.0"
 
 # AWS's own documentation example account IDs — never real.
 EXAMPLE_ACCOUNT_IDS = frozenset(
@@ -158,8 +159,16 @@ TRUTHY = frozenset({"1", "true", "yes", "on"})
 # of the eight prefixes listed here were decorative and every role and user ID
 # scanned clean. Found by this scanner's own regression suite on 2026-08-04,
 # which is the entire argument for having written one.
+#
+# The boundaries are explicit character-class lookarounds, not \b, since 5.3.0.
+# \b treats '_' as a word character, so the shapes these IDs most often appear
+# in — `creds_AKIA…_old`, an env var name, a filename — put an underscore either
+# side and the boundary assertion failed. Underscore now delimits like any other
+# punctuation. A key butted directly against MORE alphanumerics still does not
+# match, which is intended: that is not a well-formed ID.
 RE_AWS_UNIQUE_ID = re.compile(
-    r"\b(?:AKIA|ASIA|AROA|AIDA|APKA|ANPA|AGPA|AIPA)[0-9A-Z]{16,17}\b"
+    r"(?<![0-9A-Za-z])(?:AKIA|ASIA|AROA|AIDA|APKA|ANPA|AGPA|AIPA)"
+    r"[0-9A-Z]{16,17}(?![0-9A-Za-z])"
 )
 
 # ARNs. Partition is [a-z-]* so aws-cn and aws-us-gov are covered. Matched on a
@@ -169,7 +178,13 @@ RE_AWS_UNIQUE_ID = re.compile(
 # ARN (arn:aws:iam::111122223333:root, which AWS's own docs are full of) is not
 # reported. Without the capture this rule fired on every pasted example policy —
 # exactly the noise that trains people to reach for --no-verify.
-RE_ARN_ACCOUNT = re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:([0-9]{12}):")
+#
+# IGNORECASE since 5.3.0: `ARN:AWS:S3:::<bucket>` scanned clean end to end. An
+# uppercase IAM ARN was still caught by RE_TWELVE on its account digits, but a
+# bucket ARN has no second rule behind it, so that casing was a total miss.
+RE_ARN_ACCOUNT = re.compile(
+    r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:([0-9]{12}):", re.IGNORECASE
+)
 # S3 ARNs. The bucket segment is CAPTURED, not just matched, for the same
 # reason RE_ARN_ACCOUNT captures the account ID: the rule exists to catch a real
 # internal BUCKET NAME, and `arn:aws:s3:::<bucket>` is the opposite of that.
@@ -183,7 +198,35 @@ RE_ARN_ACCOUNT = re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:([0-9]{12}):"
 # after that slash was never examined at all. (Spelled out in prose because a
 # literal example of it would make this file unstageable under its own rule; the
 # case is pinned in the test suite instead.)
-RE_ARN_S3 = re.compile(r"arn:aws[a-z-]*:s3:::([^\s\"\'`,\]\)}]*)")
+RE_ARN_S3 = re.compile(r"arn:aws[a-z-]*:s3:::([^\s\"\'`,\]\)}]*)", re.IGNORECASE)
+
+# The SAME bucket name, written the three other ways people actually write it.
+#
+# Until 5.3.0 a bucket name was only recognised inside `arn:aws:s3:::`, which is
+# the LEAST common form: nobody types an ARN to copy a file. `s3://<bucket>`,
+# a virtual-hosted URL and a path-style URL all scanned clean, and unlike an
+# account ID a bucket name has no second rule behind it, so the miss was total.
+# The 2026-07-18 incident's leaked item was a bucket name holding personal data.
+#
+# All three capture the bucket and run through the same _is_placeholder_bucket
+# filter as the ARN rule, so `s3://my-bucket` stays as waivable as
+# `arn:aws:s3:::my-bucket` — the house placeholder convention keeps working.
+# The `s3:` and `//` halves are concatenated rather than written whole, for the
+# same reason the s3-arn fixtures in the test suite are split: written as one
+# literal, this line matches its OWN rule and makes the scanner unstageable
+# under itself. Caught by running the new rule over the repo, which is the
+# cheapest possible way to find out.
+RE_S3_URI = re.compile(
+    r"(?<![0-9A-Za-z])" + r"s3:" + r"//([^\s\"\'`,\]\)}]*)", re.IGNORECASE
+)
+RE_S3_VHOST = re.compile(
+    r"https?://([a-z0-9][a-z0-9.\-]*)\.s3[.-][a-z0-9.\-]*amazonaws\.com",
+    re.IGNORECASE,
+)
+RE_S3_PATH_STYLE = re.compile(
+    r"https?://s3[.-][a-z0-9.\-]*amazonaws\.com/([^\s\"\'`,\]\)}]*)",
+    re.IGNORECASE,
+)
 
 # Bucket names that are obviously stand-ins. Exact matches only for the generic
 # words — a prefix test would exempt a real "my-bucket-prod".
@@ -235,15 +278,39 @@ RE_PERCENT_TEMPLATE = re.compile(r"^%[A-Za-z_][A-Za-z0-9_]*%$")
 RE_SHOUTING_PLACEHOLDER = re.compile(r"^[A-Z0-9_]*[A-Z_][A-Z0-9_]*$")
 
 
-def _is_placeholder_bucket(name: str) -> bool:
-    """True if this bucket segment is a stand-in rather than a real name."""
+def _is_placeholder_bucket(name: str, dns_form: bool = False) -> bool:
+    """
+    True if this bucket segment is a stand-in rather than a real name.
+
+    `dns_form` marks a name that came out of a HOSTNAME rather than an ARN or
+    an s3 URI. DNS is case-insensitive, so a virtual-hosted URL written with the
+    bucket label in CAPITALS still resolves to the real, lowercase bucket —
+    which means the all-caps "obviously a placeholder" test must NOT apply
+    there. (Spelled out in prose rather than shown: a literal example would
+    make this file unstageable under its own rule.) It is sound for ARNs,
+    where the name is case-sensitive and an all-caps one genuinely cannot be
+    the real bucket. Applying it to both was a false negative introduced by
+    5.3.0's own IGNORECASE change and caught only on re-review.
+    """
+    # S3 bucket names are 3-63 characters, so anything shorter is not a name
+    # that could exist — it is someone's shorthand. `aws s3 cp s3://b s3://b`
+    # in a runbook is the common shape. Length is a property of the naming
+    # rules rather than a guess, so this cannot exempt a real bucket.
+    #
+    # Known, accepted narrowing: `s3://ab/real-bucket` blocked in 5.2.0 and does
+    # not now, because the first segment is what gets tested. Disclosure needs
+    # the bucket in first position, so the loss is small — and the alternative
+    # (walking past a short first segment) would start reporting ordinary KEY
+    # names as buckets, which is a worse trade.
+    if len(name) < 3:
+        return True
     if name in PLACEHOLDER_BUCKETS:
         return True
     if name.startswith(PLACEHOLDER_BUCKET_STARTS):
         return True
     if RE_PERCENT_TEMPLATE.match(name):
         return True
-    if RE_SHOUTING_PLACEHOLDER.match(name):
+    if not dns_form and RE_SHOUTING_PLACEHOLDER.match(name):
         return True
     return name.lower().startswith(PLACEHOLDER_BUCKET_PREFIXES)
 
@@ -254,7 +321,41 @@ RE_PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 RE_TWELVE = re.compile(r"(?<!\d)(\d{12})(?!\d)")
 
 # The console renders account IDs hyphenated in some views.
-RE_TWELVE_HYPHENATED = re.compile(r"(?<!\d)(\d{4})-(\d{4})-(\d{4})(?!\d)")
+#
+# 5.3.0 tried to generalise the separator and ended up back at HYPHEN ONLY,
+# which is where master already was. Recording the attempt because the reasoning
+# is the useful part, and because the next person will have the same idea.
+#
+# Attempt 1, [-._ ]: `chmod 0644 0755 0700`, `Ports 8080 9090 3000 are open` and
+# `latency ms: 1200 1450 1600` all blocked as account IDs. Any three
+# space-separated 4-digit numbers did. Dot brought Cisco-format MAC addresses
+# (0011.2233.4455) with it.
+#
+# Attempt 2, [-_]: underscore looked near-costless and is not. Timestamped
+# filenames are exactly this shape — `backup_2026_0812_1530.log`,
+# `release_1024_2048_4096.bin` — and PATHNAMES are scanned with
+# honor_allow_marker=False, by design, because a marker in a filename would be a
+# permanent committed exemption. So there is no way to waive it: the only remedy
+# is renaming the file. An unwaivable false positive is the worst kind.
+#
+# A rule that fires on `chmod` output or on a log filename is worse than the gap
+# it closes, because it is the rule that teaches someone to reach for
+# --no-verify, and after that nothing in this file works. Non-hyphen separated
+# IDs are a real residual miss, accepted knowingly and pinned in the test suite
+# so nobody "fixes" it back a third time.
+#
+# The separator is still captured and back-referenced. With a one-member class
+# that is redundant, and it is kept so the shape survives if the class ever
+# widens again — but note it only rejects MIXED separators, which was never what
+# kept prose safe. An earlier comment claiming otherwise was simply wrong.
+RE_TWELVE_HYPHENATED = re.compile(
+    r"(?<!\d)(\d{4})([-])(\d{4})\2(\d{4})(?!\d)"
+)
+
+
+def _separated_digits(match: re.Match[str]) -> str:
+    """The 12 digits of a RE_TWELVE_HYPHENATED match, separators dropped."""
+    return match.group(1) + match.group(3) + match.group(4)
 
 # S3 ARNs are redacted as a unit: the bucket NAME is the sensitive part, and
 # masking only the arn: prefix would leave it printed in full. The name is
@@ -262,13 +363,170 @@ RE_TWELVE_HYPHENATED = re.compile(r"(?<!\d)(\d{4})-(\d{4})-(\d{4})(?!\d)")
 # scan_line uses — otherwise the two disagree, and a path containing
 # `arn:aws:s3:::BUCKET` gets masked in a block message about a finding that this
 # scanner never raised.
-RE_ARN_S3_BUCKET = re.compile(r"(arn:aws[a-z-]*:s3:::)([^\s]*)")
+RE_ARN_S3_BUCKET = re.compile(r"(arn:aws[a-z-]*:s3:::)([^\s]*)", re.IGNORECASE)
+
+# redact() counterparts for the three non-ARN bucket forms. Every rule scan_line
+# can report needs one of these, or a path blocked under that rule is echoed
+# verbatim in the very message announcing that it was blocked.
+RE_S3_URI_BUCKET = re.compile(
+    r"(?<![0-9A-Za-z])" + r"(s3:" + r"//)([^\s]*)", re.IGNORECASE
+)
+RE_S3_PATH_STYLE_BUCKET = re.compile(
+    r"(https?://s3[.-][a-z0-9.\-]*amazonaws\.com/)([^\s]*)", re.IGNORECASE
+)
 
 # Zero-width and invisible characters. Pasting from a console or a rich-text
 # editor can thread these through an identifier, splitting a 12-digit run into
 # two shorter ones that no rule matches while it still reads as an account ID to
 # every human and renders as one on GitHub. Stripped before the digit rules run.
+#
+# 5.2.0 pinned a LITERAL LIST of ten codepoints, which made this the weakest
+# defence in the file for exactly as long as nobody looked past that list. A
+# 2026-08-12 review demonstrated bypasses for account-id, aws-unique-id, s3-arn
+# AND private-key-header \u2014 all four at once, and redact() with them \u2014 using
+# bidi controls (U+202A-202E, U+2066-2069), variation selectors (U+FE00-FE0F),
+# tag characters (U+E0000-E007F) and combining marks. Every one of those renders
+# identically on GitHub and in every editor.
+#
+# So the test is now the Unicode CATEGORY, not membership of a list: Cf (format,
+# which covers zero-width spaces, bidi controls, tag characters and the soft
+# hyphen), Mn (nonspacing marks, which covers variation selectors and combining
+# marks), and Cc (controls) minus the three that are real text. A list can be
+# walked around by the next codepoint someone finds; a category cannot.
+#
+# This is an ADDITIONAL reading, never a replacement \u2014 the line as written is
+# still scanned \u2014 so a too-aggressive strip can only produce a false positive,
+# which a human can see and waive. A too-narrow one produces a silent miss.
 RE_INVISIBLE = re.compile(r"[\u200b-\u200f\u2060\u2061\u2062\u2063\ufeff\u00ad]")
+
+# Kept literal because they are real text, not formatting: stripping these would
+# join adjacent lines and columns into runs that were never adjacent.
+#
+# NAMED _STRIP_PRESERVED, not TEXT_CONTROLS. The first version of this constant
+# WAS called TEXT_CONTROLS, and a second, unrelated TEXT_CONTROLS defined ~270
+# lines further down for _is_plausible_text silently won at runtime. That one
+# includes \v and \f, so _strip_invisible preserved them \u2014 and both are Cc and
+# bypass every rule in this file. A module-level name collision, invisible to
+# every test, in the function whose entire job is catching invisible things.
+# \r is NOT preserved: it is no longer treated as a terminator (see
+# RE_LINE_BREAK), so a mid-line \r is exactly the kind of invisible splitter
+# this function exists to remove. \t and \n are real text.
+_STRIP_PRESERVED = frozenset("\t\n")
+
+# Invisible codepoints that are NOT Cf/Mn/Cc and so escape the category test.
+# These render as nothing at all while belonging to Lo or So:
+#   U+3164 HANGUL FILLER, U+115F/U+1160 hangul choseong/jungseong fillers (Lo)
+#   U+2800 BRAILLE PATTERN BLANK (So)
+# U+180E is Cf now but was Zs before Unicode 6.3.0, so it is named rather than
+# left to the host's unicodedata vintage.
+#
+# THE Zs FAMILY IS DELIBERATELY EXCLUDED, and so is the ASCII space. A space-like
+# character is treated as a space, not as nothing. The first cut of this set
+# included NBSP, U+2007 FIGURE SPACE and the rest of Zs, and every one of them
+# fused `chmod 0644<sp>0755<sp>0700` into a 12-digit run — the same false
+# positive that forced the separator class back to hyphen-only, arriving by a
+# different door. NBSP is what you get pasting from a web page, and FIGURE SPACE
+# is what aligns columns of numbers, so both are common in exactly the numeric
+# text that would misfire. Worse, in a PATHNAME scan the allow marker is not
+# honoured, so that false positive would be unwaivable.
+#
+# The cost is a real miss: an ID split by NBSP scans clean. Accepted for the
+# same reason as the separator narrowing — a control nobody trusts is worse than
+# a control with a documented gap.
+EXTRA_INVISIBLE = frozenset(
+    "\u180e"      # mongolian vowel separator
+    "\u3164"      # hangul filler
+    "\u115f"      # hangul choseong filler
+    "\u1160"      # hangul jungseong filler
+    "\u2800"      # braille pattern blank
+    # U+2028/U+2029 are Zl/Zp line separators, and they are stripped rather than
+    # split on. Splitting would not help: an ID broken across the two halves is
+    # not 12 digits on either side, so it would still pass. They are treated
+    # differently from the Zs spaces above because they are not used to separate
+    # NUMBERS in ordinary text — the NBSP false positive came from columns of
+    # figures, a shape a line separator does not appear in. Fusing two lines can
+    # only misfire if one ends with exactly 4 or 8 digits and the next begins
+    # with the complement, which is far rarer.
+    "\u2028"      # line separator
+    "\u2029"      # paragraph separator
+)
+
+_STRIPPABLE_CATEGORIES = frozenset({"Cf", "Mn", "Cc"})
+
+# Fast path: ASCII text with nothing strippable in it, which is the
+# overwhelming majority of every line this scanner ever sees.
+#
+# DERIVED from _STRIP_PRESERVED and _STRIPPABLE_CATEGORIES rather than written
+# out as a character class. The hand-written version listed \x0b, \x0c and
+# \x0e-\x1f but skipped \x0d, which was right while \r was preserved and wrong
+# the moment it stopped being — the fast path then returned every \r-bearing
+# line untouched and the strip never ran. A derived set cannot drift from the
+# rule it is meant to shortcut.
+_ASCII_STRIPPABLE = frozenset(
+    ch
+    for ch in map(chr, range(128))
+    if ch not in _STRIP_PRESERVED and unicodedata.category(ch) in _STRIPPABLE_CATEGORIES
+)
+
+
+def _strip_invisible(text: str) -> str:
+    """
+    Remove every formatting, combining and control character that can be
+    threaded through an identifier without changing how it reads.
+    """
+    if text.isascii() and not _ASCII_STRIPPABLE.intersection(text):
+        return text
+    out = []
+    for ch in text:
+        if ch in _STRIP_PRESERVED:
+            out.append(ch)
+            continue
+        if ch in EXTRA_INVISIBLE:
+            continue
+        if unicodedata.category(ch) in _STRIPPABLE_CATEGORIES:
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+# Line splitting for SCANNING. Deliberately not str.splitlines().
+#
+# splitlines() breaks on \v, \f, \x1c, \x1d, \x1e, \x85, U+2028 and U+2029 as
+# well as the real newlines. Every one of those is a character _strip_invisible
+# removes precisely because it can be threaded through an identifier — but the
+# split happens FIRST, so the two halves reached scan_line as separate lines and
+# no rule ever saw the whole ID. Rc 0 in --staged-diff, --files and --stdin
+# alike, and in the diff path the second half no longer began with '+', so it
+# was dropped entirely rather than merely split.
+#
+# Found on the third review pass, after two earlier passes had signed off on the
+# _strip_invisible fix that this quietly defeated: the function was correct and
+# unreachable. Only the three real line terminators split here.
+# \r\n and \n ONLY. A BARE \r IS CONTENT, NOT A TERMINATOR.
+#
+# The third pass fixed this for splitlines() and the fourth pass found the same
+# defect surviving in \r, which the replacement still split on. In the staged
+# diff, git's record terminator is \n; a bare \r inside a line is data. Split
+# there and the fragment after it no longer begins with '+', so the diff parser
+# DISCARDS it — an identifier following a mid-line \r scanned rc 0 through
+# --staged-diff, which is the only mode the pre-commit hook ever calls.
+#
+# The cost is that a CR-only file (classic Mac line endings) reads as a single
+# long line. Every rule still matches — they are per-string, not per-line — so
+# nothing is MISSED; the reported line number degrades to 1.
+#
+# It does change detection in the other direction, though, and an earlier
+# version of this comment wrongly claimed it did not: fusing the lines can also
+# create a match that was never there, e.g. a CR-separated column of 4-digit
+# numbers reading as one 12-digit run. That is a false positive, waivable with
+# the marker in content, and the trade is still clearly right — a wrong line
+# number or an over-eager block beats a silent miss.
+RE_LINE_BREAK = re.compile(r"\r\n|\n")
+
+
+def split_lines(text: str) -> list[str]:
+    """Split on real line terminators only, never on in-line control chars."""
+    return RE_LINE_BREAK.split(text)
 
 
 def _url_decoded(text: str) -> str:
@@ -292,7 +550,7 @@ def _readings(line: str) -> tuple[str, ...]:
     """
     out: list[str] = []
     for text in (line, _url_decoded(line)):
-        for form in (text, RE_INVISIBLE.sub("", text)):
+        for form in (text, RE_INVISIBLE.sub("", text), _strip_invisible(text)):
             if form not in out:
                 out.append(form)
     return tuple(out)
@@ -374,6 +632,19 @@ def scan_line(line: str, honor_allow_marker: bool = True) -> str | None:
             if not _is_placeholder_bucket(_bucket_segment(match.group(1))):
                 return "s3-arn"
 
+        # The same bucket name in the forms people actually write. Reported
+        # under their own rule name rather than "s3-arn" so a block message
+        # names the syntax the author used and is actionable without guessing.
+        for rule, pattern, dns_form in (
+            ("s3-uri", RE_S3_URI, False),
+            ("s3-url", RE_S3_VHOST, True),
+            ("s3-url", RE_S3_PATH_STYLE, False),
+        ):
+            for match in pattern.finditer(subject):
+                segment = _bucket_segment(match.group(1))
+                if not _is_placeholder_bucket(segment, dns_form=dns_form):
+                    return rule
+
     # Filter PER MATCH. A documentation example ID on the line must not suppress
     # a real ID elsewhere on that same line — the bug that killed version 3.
     #
@@ -386,7 +657,7 @@ def scan_line(line: str, honor_allow_marker: bool = True) -> str | None:
                 return "account-id"
 
         for match in RE_TWELVE_HYPHENATED.finditer(subject):
-            if not _is_example_account_id("".join(match.groups())):
+            if not _is_example_account_id(_separated_digits(match)):
                 return "account-id"
 
     return None
@@ -436,7 +707,10 @@ def _mask(text: str) -> str:
         return value if _is_example_account_id(value) else "<redacted-account-id>"
 
     def _hyphenated(match: re.Match[str]) -> str:
-        joined = "".join(match.groups())
+        # _separated_digits, not "".join(groups): group 2 is the separator, and
+        # folding it into the digits would make a real ID fail the example test
+        # and an example ID pass it — inverted in both directions.
+        joined = _separated_digits(match)
         return match.group(0) if _is_example_account_id(joined) else "<redacted-account-id>"
 
     # Every rule scan_line can report must have a counterpart here, or a path
@@ -458,8 +732,30 @@ def _mask(text: str) -> str:
             break
         return match.group(1) + "/".join(segments)
 
+    def _vhost(match: re.Match[str]) -> str:
+        # The bucket sits in the SUBDOMAIN here, so _bucket's prefix/path shape
+        # does not apply. Only the leading label is replaced; the rest of the
+        # host survives so the region stays readable.
+        #
+        # Spliced by SPAN, not by str.replace. replace() rewrites the first
+        # occurrence anywhere in the match, so a bucket whose name happens to be
+        # a substring of the URL SCHEME (a bucket named after the scheme itself)
+        # masked the scheme and printed the bucket name in full — and redact()'s
+        # re-scan could not see it, because the mangled text no longer matched.
+        # Pinned in the test suite, where the literal URL can live safely.
+        if _is_placeholder_bucket(match.group(1), dns_form=True):
+            return match.group(0)
+        whole = match.group(0)
+        start = match.start(1) - match.start(0)
+        end = match.end(1) - match.start(0)
+        return whole[:start] + "<redacted-bucket>" + whole[end:]
+
     text = RE_PEM.sub("<redacted-key-header>", text)
     text = RE_ARN_S3_BUCKET.sub(_bucket, text)
+    # Same three forms scan_line now blocks on, redacted with the same filter.
+    text = RE_S3_VHOST.sub(_vhost, text)
+    text = RE_S3_PATH_STYLE_BUCKET.sub(_bucket, text)
+    text = RE_S3_URI_BUCKET.sub(_bucket, text)
     text = RE_AWS_UNIQUE_ID.sub("<redacted-key-id>", text)
     text = RE_TWELVE.sub(_twelve, text)
     text = RE_TWELVE_HYPHENATED.sub(_hyphenated, text)
@@ -604,7 +900,7 @@ def _iter_decoded_lines(path: str, data: bytes, unscannable: list[str]):
     if not any(_is_plausible_text(text, kind) for text, kind in candidates):
         unscannable.append(path)
     for text, _kind in candidates:
-        for n, line in enumerate(text.splitlines(), 1):
+        for n, line in enumerate(split_lines(text), 1):
             yield path, n, line
 
 
@@ -633,14 +929,17 @@ def _git(args: list[str], purpose: str) -> bytes:
     scan that cannot run must block, full stop.
 
     `purpose` is a fixed English phrase and never interpolates a pathname: a path
-    can itself be the identifier, and this text goes to stderr.
+    can itself be the identifier, and this text goes to stderr. That guarantee
+    covered `purpose` and NOT git's own stderr, which was written through raw —
+    and git quotes the offending pathname back at you in most of its failure
+    messages. Now redacted, like every other path this file displays.
     """
     proc = subprocess.run(["git", *args], capture_output=True, check=False)
     if proc.returncode != 0:
         # Only the first couple of stderr lines: git answers a bad invocation
         # with its full usage text, which would bury the actual message.
         stderr = proc.stderr.decode("utf-8", errors="replace")
-        detail = "\n".join(f"  {ln}" for ln in stderr.strip().splitlines()[:2])
+        detail = "\n".join(f"  {redact(ln)}" for ln in stderr.strip().splitlines()[:2])
         sys.stderr.write(
             f"scan-identifiers: BLOCKED — a git command failed (exit "
             f"{proc.returncode}), so {purpose} could not be scanned.\n"
@@ -669,8 +968,14 @@ def _git_blob(path: str) -> bytes | None:
     an untested rationale for a fallback is worse than none. It stays as
     defence in depth for whatever else `git cat-file` can refuse.
     """
+    # `:./{path}`, NOT `:{path}`. A bare `:name` is a REVSPEC, and `:0:notes.md`
+    # means "stage 0 of notes.md" — so a staged file literally named
+    # `0:notes.md` resolved to a DIFFERENT blob, which scanned clean while the
+    # real one carried the identifier. The `:./` form is documented in
+    # gitrevisions as path-relative-to-cwd and cannot be reinterpreted as a
+    # stage number. Hooks run at the top level, so cwd is the repo root.
     proc = subprocess.run(
-        ["git", "cat-file", "blob", f":{path}"], capture_output=True, check=False
+        ["git", "cat-file", "blob", f":./{path}"], capture_output=True, check=False
     )
     return proc.stdout if proc.returncode == 0 else None
 
@@ -682,44 +987,67 @@ def iter_staged_diff_lines():
     """
     Yield (path, lineno, content) for lines ADDED in the staged diff.
 
-    The '+++ ' file header is only honoured when the preceding line was '--- ',
-    which is how git always emits it. Without that guard, an added line whose
-    own content begins '++ b/' appears as '+++ b/...' and would be swallowed as
-    a header, skipping the scan for that line.
+    Header detection is POSITIONAL, not content-based: a '--- ' or '+++ ' line
+    is a header only when we are not inside a hunk.
+
+    The previous guard honoured '+++ ' whenever the preceding line began '--- ',
+    "which is how git always emits it". That is true of headers and also
+    reproducible by CONTENT: a removed line whose text starts '-- ' renders as
+    '--- ', and an added line whose text starts '++ ' renders as '+++ '. Put
+    those adjacent and the added line is consumed as a header and never
+    scanned. Verified to drop account IDs, bucket URIs, access-key IDs and PEM
+    headers alike — including the two rules `allow-identifier` cannot waive —
+    through --staged-diff, which is the only mode the pre-commit hook calls.
+
+    Position is unambiguous where content is not. Inside a hunk every line
+    carries a +/-/space/backslash prefix, so a bare '@@' or 'diff --git ' can
+    only be structure; outside a hunk there is no content to confuse.
     """
     out = _git_text(
         ["diff", "--cached", "--unified=0", "--no-color", *NO_CUSTOM_DIFF],
         "the staged diff",
     )
 
-    path, lineno, prev = None, 0, ""
-    for raw in out.splitlines():
-        if raw.startswith("+++ ") and prev.startswith("--- "):
-            target = raw[4:]
-            path = target[2:] if target.startswith("b/") else target
-            prev = raw
+    path, lineno, in_hunk = None, 0, False
+    for raw in split_lines(out):
+        # Starts a new file's header block, and ends any hunk in progress.
+        if raw.startswith("diff --git "):
+            in_hunk = False
             continue
+        if not in_hunk:
+            if raw.startswith("+++ "):
+                target = raw[4:]
+                path = target[2:] if target.startswith("b/") else target
+                continue
+            if raw.startswith("--- "):
+                continue
         if raw.startswith("@@"):
             m = re.match(r"^@@ -[0-9,]+ \+(\d+)", raw)
             lineno = int(m.group(1)) if m else 0
-            prev = raw
+            in_hunk = True
             continue
         if raw.startswith("+"):
             yield path, lineno, raw[1:]
             lineno += 1
-        prev = raw
 
 
 def iter_staged_paths():
     """
     Yield (path, None, path) for every staged pathname.
 
-    Deletions are excluded (--diff-filter=ACMR): that path is already in
+    Deletions are excluded (--diff-filter=ACMRT): that path is already in
     history, and refusing the commit that removes it helps nobody. For a rename
     only the new name is checked, for the same reason.
     """
     out = _git_text(
-        ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z", *NO_CUSTOM_DIFF],
+    # T (typechange) was missing until 2026-08-12, and its absence hid a file
+    # from EVERY iterator at once. A path that flips blob type — symlink to
+    # regular file — and whose new content yields no diff text (binary, or
+    # `-diff` in .gitattributes) produced no '+' lines here AND no "-\t-"
+    # numstat row, so the undiffed-file fallback that exists to catch exactly
+    # that case never fired. Silent rc 0, defeating both the content scan and
+    # the unscannable fail-closed report. Pre-existing on master.
+        ["diff", "--cached", "--name-only", "--diff-filter=ACMRT", "-z", *NO_CUSTOM_DIFF],
         "the staged path list",
     )
     for path in out.split("\0"):
@@ -737,7 +1065,7 @@ def _staged_numstat():
     field after the second tab is what marks it.
     """
     out = _git_text(
-        ["diff", "--cached", "--numstat", "--diff-filter=ACMR", "-z", *NO_CUSTOM_DIFF],
+        ["diff", "--cached", "--numstat", "--diff-filter=ACMRT", "-z", *NO_CUSTOM_DIFF],
         "the staged file list",
     )
     fields = out.split("\0")
@@ -824,7 +1152,7 @@ def iter_stdin_lines(label):
     message. A commit-msg hook cannot see the cleanup mode, so it cannot know
     which case it is in, and the only safe answer is to scan the whole thing.
     """
-    for n, line in enumerate(sys.stdin.read().splitlines(), 1):
+    for n, line in enumerate(split_lines(sys.stdin.read()), 1):
         yield label, n, line
 
 
