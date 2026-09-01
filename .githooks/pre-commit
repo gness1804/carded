@@ -86,8 +86,15 @@ changed_files="$(
 
 # >>> LINTER SECTION (customized per repo by the /pre-commit skill) <<<
 # Generated BAML trees are excluded, matching this repo's previous hook.
+#
+# .githooks/ is excluded for a different reason: scan_identifiers.py is vendored
+# byte-identical into every install and the test suite asserts it, so a repo that
+# runs its own formatter over that file demands a formatting the file cannot
+# have. The update would then only land with --no-verify, disabling the
+# identifier scan and gitleaks on the very commit that updates them.
 py_files="$(printf '%s\n' "$changed_files" \
   | grep -E '\.py$' \
+  | grep -v '^\.githooks/' \
   | grep -v '^baml_client/' \
   | grep -v '^baml_src/' || true)"
 if [ -n "$py_files" ]; then
