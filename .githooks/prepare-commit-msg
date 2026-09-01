@@ -74,13 +74,39 @@ esac
 # preserves them verbatim, so draft and message agree with comments intact.
 # Stripping them from both sides would make a draft of "feat: x" + "# note"
 # collide with an unrelated `git commit -m "feat: x"` and block it.
+# Normalisation must absorb EVERYTHING git's cleanup does, because the draft is
+# raw on disk while $msg_file has already been through it. Under cleanup mode
+# `whitespace` — what -m and -F use — git strips per-line trailing whitespace,
+# drops leading and trailing blank lines, AND collapses runs of blank lines to
+# one. This function used to do the first two and not the third.
+#
+# That omission was a silent fail-open in this hook, present since it was
+# written and unrelated to the draft-cleanup work that exposed it. A draft
+# containing two consecutive blank lines — an ordinary thing in a message with
+# paragraphs — arrived here already collapsed by git, did not compare equal to
+# the draft on disk, and so was never recognised as "in use". The whole
+# stale-draft check then exited 0 without running. Verified 2026-08-31 by
+# capturing what git actually hands this hook: the blank run is already gone.
+#
+# So the draft this control most needed to catch was one written in the house
+# style it is documented against. Widening the match can only make the check
+# apply MORE often, which is the safe direction for a guard that had been
+# quietly skipping.
+#
+# post-commit carries a byte-identical copy of this function, deliberately: the
+# two hooks must agree on what "the draft was used" means, or one marks a draft
+# in use and the other declines to clean it up.
 normalize() {
   awk '
     { sub(/[[:space:]]+$/, ""); buf[++n] = $0 }
     END {
       first = 1;   while (first <= n && buf[first] == "") first++
       last  = n;   while (last >= first && buf[last] == "") last--
-      for (i = first; i <= last; i++) print buf[i]
+      blank = 0
+      for (i = first; i <= last; i++) {
+        if (buf[i] == "") { blank++; if (blank > 1) continue } else { blank = 0 }
+        print buf[i]
+      }
     }
   ' < "$1"
 }
@@ -90,7 +116,11 @@ strip_comments() { printf '%s\n' "$1" | sed '/^#/d' | awk '
   END {
     first = 1;   while (first <= n && buf[first] == "") first++
     last  = n;   while (last >= first && buf[last] == "") last--
-    for (i = first; i <= last; i++) print buf[i]
+    blank = 0
+    for (i = first; i <= last; i++) {
+      if (buf[i] == "") { blank++; if (blank > 1) continue } else { blank = 0 }
+      print buf[i]
+    }
   }
 '; }
 
@@ -113,30 +143,94 @@ fi
 
 [ "$using_draft" -eq 1 ] || exit 0
 
-# --- The draft IS in use. Now verify the stamp. ------------------------------
-if [ ! -r "$base_file" ]; then
-  # Fail open, but never silently: this is precisely the situation the guard
-  # exists for, and an unstamped draft opts out of it invisibly otherwise.
-  {
-    echo ""
-    echo "prepare-commit-msg: WARNING — committing from $draft, but there is no"
-    echo "  stamp at $base_file, so the stale-draft check CANNOT run."
-    echo "  Write drafts with commit_draft.py so they are stamped:"
-    echo "    python3 ~/.claude/skills/pre-commit/references/commit_draft.py --message '...'"
-    echo ""
-  } >&2
-  exit 0
-fi
+# Leave a marker saying the draft is in play for THIS attempt, for post-commit
+# to find. That hook deletes a committed draft so a leftover cannot later be
+# mistaken for an unstamped one, but it runs after the fact and cannot see
+# $msg_source — so it cannot distinguish a draft-driven commit from a
+# cherry-pick, a merge, a squash, or `--amend --no-edit`. Re-deriving the answer
+# from the committed message alone got it wrong: a cherry-pick of a commit whose
+# message matched a pending draft deleted that draft (verified 2026-08-31). The
+# source filtering above is the knowledge post-commit lacks, so it is recorded
+# here rather than guessed there.
+#
+# Written BEFORE the stamp checks, so a blocked commit leaves a marker behind.
+# That is deliberate and safe: post-commit consumes the marker unconditionally
+# and still requires the committed message to match the draft, so a stale marker
+# cannot make some later unrelated commit eat the draft.
+: > "$git_dir/COMMIT_MSG_DRAFT.inuse" 2>/dev/null || true
 
+# --- The draft IS in use. Now verify the stamp. ------------------------------
+#
+# The escape hatch is consulted FIRST, before any branch that can block. It used
+# to sit after the missing-stamp check, which meant the block below printed
+# "use ALLOW_STALE_DRAFT=1" and then ignored it — advice that does not work, in
+# the one message a blocked author actually reads. Caught 2026-08-31 by the
+# hook's own end-to-end test, immediately after that branch was changed from a
+# warning into a block; while it was only a warning the ordering never mattered.
+# NOTE the widened scope, since the variable's name no longer describes all of
+# it: because this now sits above the missing- and truncated-stamp branches,
+# ALLOW_STALE_DRAFT=1 waives the PROVENANCE check too, letting a hand-written
+# unstamped draft through. That is intended — it is the single "I know what I am
+# doing" escape for this hook, and --no-verify does not reach it — but it is
+# broader than "stale", and the name is kept only because it is already in
+# CLAUDE.md and in muscle memory.
 if [ "${ALLOW_STALE_DRAFT:-}" = "1" ]; then
   echo "prepare-commit-msg: stale-draft check skipped (ALLOW_STALE_DRAFT=1)." >&2
   exit 0
 fi
 
+if [ ! -r "$base_file" ]; then
+  # BLOCK, not warn. This used to `exit 0` after printing a warning, which
+  # contradicted CLAUDE.md's own description of the control ("a draft written by
+  # hand with no sidecar opts out of that protection, which is exactly how the
+  # original failure went unnoticed"). A warning printed above a successful
+  # commit is not a control: the commit lands, the terminal scrolls, and the
+  # only path that reaches this branch is precisely the hand-written draft the
+  # guard was built to catch. Writing the draft with commit_draft.py always
+  # produces the stamp, so a missing stamp means the draft did not come from the
+  # index — the exact provenance the check verifies.
+  {
+    echo ""
+    echo "prepare-commit-msg: BLOCKED — committing from $draft, but there is no"
+    echo "  stamp at $base_file, so the stale-draft check CANNOT run."
+    echo ""
+    echo "  Rewrite the draft from the staged index, which stamps it:"
+    echo "    python3 ~/.claude/skills/pre-commit/references/commit_draft.py --message '...'"
+    echo ""
+    echo "  Or, if the draft really is current, say so for this commit only:"
+    echo "    ALLOW_STALE_DRAFT=1 git commit -F $draft"
+    echo ""
+    echo "  (--no-verify does NOT skip this hook.)"
+    echo ""
+  } >&2
+  exit 1
+fi
+
+
 # Line 1: HEAD sha. Line 2 (optional): index tree sha.
 recorded_raw="$(sed -n '1p' "$base_file" | tr -d '[:space:]')"
 recorded_tree="$(sed -n '2p' "$base_file" | tr -d '[:space:]')"
-[ -n "$recorded_raw" ] || exit 0
+
+# A stamp file that exists but has no first line is a TRUNCATED stamp, not an
+# absent one, and it reached the same silent `exit 0` as a missing sidecar did.
+# That made a zero-byte COMMIT_MSG_DRAFT.base — trivially produced by an
+# interrupted write — a permanent, invisible opt-out of the whole check. Treated
+# the same as no stamp at all: block, with the same two remedies.
+if [ -z "$recorded_raw" ]; then
+  {
+    echo ""
+    echo "prepare-commit-msg: BLOCKED — the stamp at $base_file is empty or"
+    echo "  truncated, so the stale-draft check CANNOT run."
+    echo ""
+    echo "  Rewrite the draft from the staged index, which re-stamps it:"
+    echo "    python3 ~/.claude/skills/pre-commit/references/commit_draft.py --message '...'"
+    echo ""
+    echo "  Or, if the draft really is current:"
+    echo "    ALLOW_STALE_DRAFT=1 git commit -F $draft"
+    echo ""
+  } >&2
+  exit 1
+fi
 
 # Resolve to a full sha so a short sha in the sidecar still compares correctly.
 # "EMPTY" is the sentinel for a draft written against an unborn HEAD.

@@ -37,7 +37,21 @@
 set -uo pipefail
 
 msg_file="${1:-}"
-[ -n "$msg_file" ] && [ -r "$msg_file" ] || exit 0
+
+# Fail CLOSED on a message file that cannot be read, matching this hook's
+# posture for a missing scanner a few lines down. `exit 0` here was a silent
+# fail-open in the one branch where nothing else can compensate: git always
+# passes this path, so an empty or unreadable argument means the message could
+# not be examined at all — and an unexaminable message is exactly the case the
+# hook exists for. Reporting "clean" there is the control lying about its own
+# coverage. There is no legitimate invocation this now breaks; --no-verify
+# remains the knowing bypass.
+if [ -z "$msg_file" ] || [ ! -r "$msg_file" ]; then
+  echo "commit-msg: BLOCKED — the commit-message file was not supplied or is" >&2
+  echo "  not readable, so it could not be scanned for cloud identifiers." >&2
+  echo "  Retry, or commit with --no-verify knowingly." >&2
+  exit 1
+fi
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -86,7 +100,15 @@ fi
 # Residual cost: `git commit -v` can now false-positive when the staged diff's
 # unchanged CONTEXT lines already contain an identifier. That is a blocked
 # commit the author retries without -v — the right way for this to be wrong.
-if ! python3 "$SCANNER" --stdin --label 'commit-message' < "$msg_file"; then
+#
+# --no-allow-marker (scanner 5.5.0+): the per-line `allow-identifier` escape
+# hatch is disabled for this sink. In a FILE the marker is a note beside one
+# known false positive, and the file can be edited afterwards. A commit message
+# is neither: it is pushed verbatim, correcting it means rewriting history, and
+# the marker would be published in the same line as the identifier it excused.
+# Before this flag, `git commit -m "... <id> allow-identifier"` committed clean —
+# the escape hatch disarming the control in the one sink that has no undo.
+if ! python3 "$SCANNER" --stdin --no-allow-marker --label 'commit-message' < "$msg_file"; then
   {
     echo ""
     echo "commit-msg: BLOCKED — the commit message contains a cloud identifier."

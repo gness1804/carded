@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+#
+# Git post-commit hook (installed/updated by the /pre-commit skill).
+# Re-run /pre-commit to regenerate or update this file.
+#
+# WHAT IT DOES: after a commit that actually USED $GIT_DIR/COMMIT_MSG_DRAFT,
+# deletes the draft and its .base stamp.
+#
+# WHY IT EXISTS: nothing ever cleaned up a draft, so one lingered indefinitely
+# after being committed. That is a problem for its sibling prepare-commit-msg
+# hook, which blocks when a draft is in use but carries no stamp. A leftover
+# draft plus a later `git commit -m "<the same text>"` — the paste path
+# CLAUDE.md actively encourages — looks exactly like an unstamped draft, and the
+# commit is hard-blocked with only ALLOW_STALE_DRAFT=1 as an escape.
+#
+# Found 2026-08-31 by review of the change that turned that warning into a
+# block. The alternative fix was to loosen prepare-commit-msg back to warning,
+# which would restore the fail-open CLAUDE.md names as the reason the original
+# stale-draft failure went unnoticed. Deleting a draft once it has been
+# committed removes the cause instead of the alarm.
+#
+# post-commit cannot fail a commit — it runs after the commit object exists —
+# so every path here exits 0. Nothing about it is a control; it is housekeeping
+# that keeps a control from firing spuriously. Every uncertain case therefore
+# resolves to "leave the draft alone": a surviving draft costs one confusing
+# block, a wrongly deleted one costs work the author had not committed yet.
+#
+# TWO conditions must BOTH hold before anything is deleted.
+#
+#   1. prepare-commit-msg left a $GIT_DIR/COMMIT_MSG_DRAFT.inuse marker for this
+#      attempt. That hook, and only that hook, knows the message SOURCE, so it
+#      is the only place that can tell a draft-driven commit from a cherry-pick,
+#      a merge, a squash, or `--amend --no-edit`. Without the marker this hook
+#      re-derived "was the draft used?" from the committed message alone and got
+#      it wrong: a cherry-pick of a commit whose message happened to match a
+#      pending draft deleted that draft, as did --amend --no-edit. Both verified
+#      2026-08-31.
+#   2. The committed message still matches the draft. This covers the marker
+#      going stale — a blocked or aborted commit leaves one behind, and the next
+#      unrelated commit must not consume the draft on the strength of it.
+#
+# Neither condition is sufficient alone, which is the point.
+
+set -uo pipefail
+
+git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
+[ -n "$git_dir" ] || exit 0
+
+draft="$git_dir/COMMIT_MSG_DRAFT"
+base_file="$git_dir/COMMIT_MSG_DRAFT.base"
+inuse="$git_dir/COMMIT_MSG_DRAFT.inuse"
+
+# The marker is single-use whatever happens below, so a stale one cannot sit
+# around influencing some later commit.
+if [ ! -e "$inuse" ]; then
+  exit 0
+fi
+rm -f "$inuse"
+
+[ -r "$draft" ] || exit 0
+
+# Normalisation must absorb everything `git commit` itself removes, because the
+# two sides being compared have been through different amounts of processing:
+# the draft is raw on disk, while `git log -1 %B` has already been through
+# git's cleanup. Under cleanup mode `whitespace` — what -m and -F use — git
+# strips trailing whitespace from each line, drops leading and trailing blank
+# lines, and collapses runs of blank lines to one.
+#
+# The first version of this hook stripped only CRs and trailing blank lines, so
+# it disagreed with git on every draft that had a trailing space on any line or
+# a double blank between paragraphs. prepare-commit-msg would see the draft in
+# use and this hook would not, leaving the draft in place — which is to say the
+# hook silently did nothing in most real cases, including the house commit style
+# of a subject line followed by "- " bullets. Verified 2026-08-31; the only
+# drafts it did clean up were perfectly clean ones.
+#
+# Both sides go through the SAME function, so the comparison does not care which
+# cleanup mode git actually applied.
+normalize() {
+  sed -e 's/\r$//' -e 's/[[:space:]]*$//' "$1" | awk '
+    { lines[NR] = $0 }
+    END {
+      first = 0
+      last = 0
+      for (i = 1; i <= NR; i++) {
+        if (lines[i] ~ /[^[:space:]]/) {
+          if (first == 0) first = i
+          last = i
+        }
+      }
+      if (first == 0) exit
+      blank = 0
+      for (i = first; i <= last; i++) {
+        if (lines[i] == "") {
+          blank++
+          if (blank > 1) continue
+        } else {
+          blank = 0
+        }
+        print lines[i]
+      }
+    }'
+}
+
+strip_comments() { printf '%s\n' "$1" | grep -v '^#' || true; }
+
+committed="$git_dir/.post-commit-msg.$$"
+trap 'rm -f "$committed"' EXIT INT TERM HUP
+git log -1 --pretty=%B > "$committed" 2>/dev/null || exit 0
+
+draft_norm="$(normalize "$draft")"
+msg_norm="$(normalize "$committed")"
+
+# An empty draft would match an empty message and delete itself spuriously.
+[ -n "$draft_norm" ] || exit 0
+
+used=0
+if [ "$draft_norm" = "$msg_norm" ]; then
+  used=1
+elif ! printf '%s\n' "$draft_norm" | grep -q '^#'; then
+  # Only when the draft itself holds no comment lines, so stripping can affect
+  # the committed side alone — same guard, and same reason, as the sibling hook.
+  [ "$(strip_comments "$msg_norm")" = "$draft_norm" ] && used=1
+fi
+
+[ "$used" -eq 1 ] || exit 0
+
+rm -f "$draft" "$base_file"
+echo "post-commit: committed from COMMIT_MSG_DRAFT; draft and stamp removed." >&2
+exit 0

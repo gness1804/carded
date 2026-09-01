@@ -40,7 +40,24 @@ esac
 # moving them to a tracked .githooks/ is what exposed it. Describe the pattern,
 # do not write it.
 TEMP_RE='(//|#|/\*|<!--)[[:space:]]*TEMP:'
-added_lines="$(git diff --cached --unified=0 --no-color -- . | grep '^+' | grep -v '^+++' || true)"
+# --no-ext-diff / --no-textconv are load-bearing, not cosmetic. A repo-configured
+# textconv filter or an external diff driver rewrites what `git diff` PRINTS, so
+# the text scanned below is no longer the text being staged: a filter that strips
+# or transforms a line hides it from every check that reads this variable. Proven
+# 2026-08-20 in aws-security-specialty-exam — with a textconv filter active the
+# old form printed only a diff header and passed every check.
+#
+# The git call is also separated from the greps. Previously the whole pipeline
+# carried `|| true`, which was there for grep's empty-input exit 1 but also
+# swallowed a git failure: git dies, $added_lines is empty, and the checks below
+# report clean. Fail-open, in a control whose job is to fail closed. Now only the
+# greps are allowed to "fail".
+if ! staged_diff="$(git --no-pager diff --cached --unified=0 --no-color \
+    --no-ext-diff --no-textconv -- .)"; then
+  echo "pre-commit: 'git diff --cached' failed; refusing to commit (fail closed)." >&2
+  exit 1
+fi
+added_lines="$(printf '%s\n' "$staged_diff" | grep '^+' | grep -v '^+++' || true)"
 if printf '%s\n' "$added_lines" | grep -Eq "$TEMP_RE"; then
   echo "pre-commit: found a 'TEMP:' comment in the staged changes:" >&2
   printf '%s\n' "$added_lines" | grep -En "$TEMP_RE" >&2
@@ -124,15 +141,44 @@ fi
 # ARNs, principal IDs), which gitleaks does not cover because they are not
 # secrets. gitleaks catches SECRETS (API keys, tokens, private keys). Regexes
 # alone cannot close this; both layers are needed.
+# `gitleaks git --staged`, not `gitleaks protect --staged`. protect is deprecated
+# and is removed in gitleaks v9, and its removal would have been indistinguishable
+# from a finding: an unknown subcommand also exits 1, and the output was sent to
+# /dev/null, so a routine `brew upgrade` would have produced a permanent
+# "BLOCKED — gitleaks found a secret" on every commit, with the suggested re-run
+# command failing the same way. Found 2026-08-31 by review, before it bit.
+#
+# Output is captured rather than discarded so the two cases can be told apart.
+# It is only ever PRINTED on the tool-error path, whose text carries no scanned
+# content; a genuine finding still prints nothing but a pointer, because even
+# --redact output is not something to spray into a terminal by default.
 if command -v gitleaks >/dev/null 2>&1; then
-  if ! gitleaks protect --staged --redact --no-banner --exit-code 1 >/dev/null 2>&1; then
+  if ! gitleaks_out="$(gitleaks git --staged --redact --no-banner --exit-code 1 2>&1)"; then
+    if printf '%s' "$gitleaks_out" | grep -qiE 'unknown (command|flag|shorthand)|invalid argument'; then
+      echo "pre-commit: BLOCKED — gitleaks ran but did not understand its arguments," >&2
+      echo "  so secret scanning did NOT happen. This is a gitleaks version change," >&2
+      echo "  not a finding. Re-run /pre-commit to regenerate this hook." >&2
+      printf '%s\n' "$gitleaks_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
     echo "pre-commit: BLOCKED — gitleaks found a secret in the staged changes." >&2
-    echo "  Re-run for detail (output is redacted): gitleaks protect --staged --redact --verbose" >&2
+    echo "  Re-run for detail (output is redacted): gitleaks git --staged --redact --verbose" >&2
     exit 1
   fi
 else
-  echo "pre-commit: WARNING — gitleaks not installed; secret scanning SKIPPED." >&2
-  echo "  Install with: brew install gitleaks" >&2
+  # Fail CLOSED. This used to warn and continue, which disagreed with the
+  # identifier scan directly above and was invisible precisely BECAUSE gitleaks
+  # happens to be installed here: the branch never ran, so the gap could only
+  # surface on a new machine, in CI, or after a PATH change — and it would
+  # surface as "nothing happened" rather than as an error. A secret-scanning
+  # control that quietly turns itself off is worse than no control at all,
+  # because it still reads as protection. Found 2026-08-31 by review.
+  echo "pre-commit: BLOCKED — gitleaks is not installed or not on PATH." >&2
+  echo "  Secret scanning cannot run, so the commit is refused rather than" >&2
+  echo "  silently proceeding unprotected." >&2
+  echo "  Install it (brew install gitleaks), or commit with --no-verify" >&2
+  echo "  knowingly." >&2
+  exit 1
 fi
 
 # --- 5. Sync CFS issues with GitHub (only when applicable) -------------------

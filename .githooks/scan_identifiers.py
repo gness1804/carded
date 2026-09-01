@@ -85,7 +85,7 @@ import subprocess
 import sys
 import unicodedata
 
-SCANNER_VERSION = "5.3.0"
+SCANNER_VERSION = "5.5.1"
 
 # AWS's own documentation example account IDs — never real.
 EXAMPLE_ACCOUNT_IDS = frozenset(
@@ -337,6 +337,13 @@ RE_TWELVE = re.compile(r"(?<!\d)(\d{12})(?!\d)")
 # honor_allow_marker=False, by design, because a marker in a filename would be a
 # permanent committed exemption. So there is no way to waive it: the only remedy
 # is renaming the file. An unwaivable false positive is the worst kind.
+#
+# A THIRD review, 2026-08-31, reached the same conclusion and recorded it as
+# WON'T-FIX rather than reopening it. If you are the fourth: the two attempts
+# below are the entire argument, and nothing about them has changed. The gap is
+# non-hyphen-separated account IDs; the price of closing it is a rule that fires
+# on `chmod 0644 0755 0700` or on `backup_2026_0812_1530.log`, and the second of
+# those cannot be waived at all because pathnames ignore the allow-marker.
 #
 # A rule that fires on `chmod` output or on a log filename is worse than the gap
 # it closes, because it is the rule that teaches someone to reach for
@@ -692,10 +699,31 @@ def redact(text: str) -> str:
     WHOLESALE. Losing the filename in that case is the correct trade: the whole
     point of this function is that a block message must never be the thing that
     publishes the identifier.
+
+    THE RE-SCAN ALSO STRIPS U+FFFD, which is a PARTIAL BACKSTOP and not the real
+    control. Say so plainly, because the first version of it was mistaken for
+    one: a display string has already been through an escaping transform, and
+    each transform splits a digit run its own way — utf-8/replace inserts U+FFFD,
+    git's `core.quotePath` (ON BY DEFAULT) inserts a literal `\\377`. Stripping
+    U+FFFD closed the first and left the second printing twelve digits of an
+    account ID. Enumerating splitters is a list where a category is needed.
+
+    Stripping U+FFFD is sufficient ONLY because every path reaching print is now
+    decoded exactly once, utf-8/replace, from the true bytes — see
+    _unquote_c_path, which converts git's C-quoted header form back to bytes
+    before that decode. One transform means one artifact. If a caller ever prints
+    a path that took a different route, this guard no longer covers it and the
+    fix is to normalise the route, not to add another escape to the list.
+
+    U+FFFD is category So, so _strip_invisible leaves it; it is removed here
+    rather than added to EXTRA_INVISIBLE because doing that globally would fuse
+    unrelated digit groups in ordinary content, which is the false positive that
+    got NBSP rejected.
     """
     masked = _mask(text)
-    if scan_line(masked, honor_allow_marker=False) is not None:
-        return FULLY_REDACTED
+    for candidate in (masked, masked.replace("�", "")):
+        if scan_line(candidate, honor_allow_marker=False) is not None:
+            return FULLY_REDACTED
     return masked
 
 
@@ -782,6 +810,96 @@ MAX_CONTROL_RATIO = 0.05
 # Ceiling on bytes decoded six ways. See _iter_decoded_lines.
 MAX_DECODE_BYTES = 10 * 1024 * 1024
 
+# Container formats whose payload is COMPRESSED. Nothing in this file
+# decompresses anything, so every candidate reading of one of these is a reading
+# of the deflated byte stream — the identifier inside is not obscured, it is
+# simply not present in any view this scanner ever looks at.
+#
+# The failure that motivates this is not theoretical. Deflate output is usually
+# high-entropy enough to fail _is_plausible_text on its own, which is why most
+# archives already reported unscannable — but a MIXED archive does not. Verified
+# 2026-08-31 against 5.4.0: a zip holding one bulky ZIP_STORED member of ASCII
+# prose plus one small ZIP_DEFLATED member containing an account ID scanned rc 0,
+# no finding, no acknowledgement. The stored member's clean ASCII dominates the
+# control-character ratio, so the whole file reads as plausible text, and the
+# deflated member is simply absent from every reading. That is the one outcome
+# this control must never produce — a confident "no findings" on a file it did
+# not read. An opaque blob honestly reported as unscannable is strictly better
+# than a clean bill of health. Same repro now returns rc 1 as unscannable.
+#
+# Matched on MAGIC BYTES, not on the file extension. The extension is whatever
+# the author typed; the magic is what an unzipper will actually act on, and a
+# renamed .docx is still a zip.
+#
+# PK\x03\x04 covers .zip and every OOXML/OpenDocument format built on it
+# (.docx, .xlsx, .pptx, .odt, .ods) plus .jar and .epub. The OLE2 signature
+# covers legacy .doc/.xls/.ppt/.msg, which are not compressed but are equally
+# unparsed here. Uncompressed .tar is deliberately ABSENT: its members are
+# stored as plain bytes, so it scans correctly today and marking it unscannable
+# would cost a real capability for nothing.
+#
+# These are recorded UNSCANNABLE rather than blocked outright, so
+# SCAN_ALLOW_UNSCANNABLE=1 remains the route for "I opened it and looked." A
+# control that made committing any archive impossible would be replaced by
+# --no-verify within a week, and --no-verify disables every check at once.
+# Signatures trusted ANYWHERE in the file, not only at offset 0.
+#
+# Checking only the first bytes was the rule's own bypass, and a cheap one:
+# `cat banner.sh mixed.zip > file` scanned rc 0 clean while `unzip -l` still
+# listed every member. That is not an exotic attack — the zip format is read
+# from its TAIL, which is exactly why self-extracting archives, appended-ZIP
+# payloads and shebang-prefixed .jar files all work, and why a stray `cat` or a
+# concatenated download produces the same shape by accident.
+#
+# Safe to search the whole buffer because every signature here contains a
+# control or high byte, so none of them occurs in ordinary prose. The two that
+# would have — bzip2's printable "BZh" and the 2-byte gzip header — are given
+# their FULL magic instead: bzip2 carries the six-byte "1AY&SY" block header
+# after the level digit, and gzip's method byte 0x08 (deflate) is the
+# only one anything emits. A 2-byte "\x1f\x8b" alone is too weak to hunt for.
+ARCHIVE_MAGIC_EMBEDDED = (
+    b"PK\x03\x04",                        # zip, docx/xlsx/pptx, odt, jar, epub
+    b"PK\x05\x06",                        # zip end-of-central-directory
+    b"PK\x07\x08",                        # spanned zip
+    b"\x1f\x8b\x08",                       # gzip (deflate), .tgz
+    *(b"BZh" + bytes([d]) + b"\x31\x41\x59\x26\x53\x59"
+      for d in range(ord("1"), ord("9") + 1)),          # bzip2, levels 1-9
+    b"\xfd7zXZ\x00",                       # xz
+    b"7z\xbc\xaf\x27\x1c",                 # 7-zip
+    b"Rar!\x1a\x07",                       # rar
+    b"\x04\x22\x4d\x18",                   # lz4 frame
+    b"\x28\xb5\x2f\xfd",                   # zstd
+    b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",       # OLE2: legacy .doc/.xls/.ppt/.msg
+    b"SQLite format 3\x00",                # sqlite database
+)
+
+# Signatures that are printable ASCII, and therefore believed ONLY at offset 0.
+# Hunting for these anywhere would fire on any document that merely QUOTES them
+# — a README explaining that PDFs begin "%PDF-" is not a PDF — and a rule that
+# blocks prose about the rule is how this control gets bypassed wholesale.
+ARCHIVE_MAGIC_PREFIX_ONLY = (
+    b"%PDF-",                              # pdf
+    b"!<arch>\n",                          # ar: .deb, static libraries
+    b"xar!",                               # xar: .pkg installers
+    b"MSCF",                               # cab
+)
+
+# PDF deserves its own note, because it is the likeliest of all of these to
+# carry a real leak and it was MISSED by the first version of this rule. A PDF
+# is a mixed container in exactly the sense that defeated the plausibility test:
+# ASCII object structure surrounding /FlateDecode content streams. Verified
+# against 5.5.0 — a 6 KB PDF whose only account ID lived inside a compressed
+# stream returned rc 0, no finding, no acknowledgement. Signed contracts,
+# invoices and console exports are all PDFs, and one of those is already on this
+# machine's incident list.
+
+
+def _is_archive(data: bytes) -> bool:
+    """True if these bytes are, or contain, a known container format."""
+    if data.startswith(ARCHIVE_MAGIC_PREFIX_ONLY):
+        return True
+    return any(sig in data for sig in ARCHIVE_MAGIC_EMBEDDED)
+
 # Control characters that DO occur in ordinary text.
 TEXT_CONTROLS = frozenset("\t\n\r\f\v")
 
@@ -791,10 +909,29 @@ CANDIDATE_ENCODINGS = (
     ("utf-16-be", "wide"),
     ("utf-32-le", "wide"),
     ("utf-32-be", "wide"),
-    # Always last and always succeeds: latin-1 is a 1:1 byte mapping, so it is
-    # the reading in which a raw-ASCII identifier can never fail to appear.
+    # latin-1 is a 1:1 byte mapping, so it is the reading in which a raw-ASCII
+    # identifier can never fail to appear.
     ("latin-1", "single"),
+    # EBCDIC family. These render digits as 0xF0-0xF9, which no reading above
+    # reproduces as digits — an account ID in cp500 surfaces ONLY here. See
+    # _EBCDIC_DIGIT_BYTES for why adding them was necessary but not sufficient.
+    ("cp037", "ebcdic"),
+    ("cp500", "ebcdic"),
+    ("cp1026", "ebcdic"),
+    ("cp424", "ebcdic"),
 )
+
+# Readings that are scanned but never count as evidence that a blob is text.
+#
+# _is_plausible_text decides whether a file is opaque enough to need human
+# review, and it takes ANY plausible reading as a yes. Both kinds here decode
+# almost anything into almost-printable output: the EBCDIC codecs map nearly the
+# whole byte range, and a byte-dropping lossy decode discards exactly the
+# undecodable bytes that made a blob look binary in the first place. Counting
+# either as evidence would let a genuinely opaque file stop being reported as
+# unscannable — the scan would get STRICTER and the fail-closed report would get
+# weaker in the same change, which is the wrong trade in both directions.
+NON_EVIDENCE_KINDS = frozenset({"ebcdic", "lossy"})
 
 
 def _is_plausible_text(text: str, kind: str) -> bool:
@@ -817,6 +954,8 @@ def _is_plausible_text(text: str, kind: str) -> bool:
       * WIDE readings are judged on ASCII share, because mojibake from binary is
         perfectly "printable" CJK and control characters would not catch it.
     """
+    if kind in NON_EVIDENCE_KINDS:
+        return False
     if not text:
         return True
     if kind == "wide":
@@ -870,6 +1009,18 @@ def _decode_candidates(data: bytes) -> list[tuple[str, str]]:
 
     for encoding, kind in CANDIDATE_ENCODINGS:
         add(_decode(data, encoding), kind)
+
+    # A byte-DROPPING reading, added last so a strict utf-8 decode wins the dedup
+    # and keeps its "single" kind.
+    #
+    # One invalid byte parked inside a digit run defeats every reading above, and
+    # not because any of them is lossy — it survives a lossless one too. latin-1
+    # renders \xff as 'ÿ', errors="replace" renders it as U+FFFD (category So, so
+    # _strip_invisible leaves it), and either way the run is SPLIT into 7 digits
+    # and 5. Preserving the byte faithfully is exactly what breaks the match.
+    # Dropping it re-joins the run. Verified: '9876543\xff21098' scans clean in
+    # latin-1 and in replace, and reports account-id here.
+    add(data.decode("utf-8", errors="ignore"), "lossy")
     return out
 
 
@@ -897,7 +1048,14 @@ def _iter_decoded_lines(path: str, data: bytes, unscannable: list[str]):
         return
 
     candidates = _decode_candidates(data)
-    if not any(_is_plausible_text(text, kind) for text, kind in candidates):
+    # An archive is unscannable BY CONSTRUCTION, whatever the plausibility test
+    # says about its compressed bytes — see ARCHIVE_MAGIC. It is still scanned
+    # below, for the same reason every other unscannable file is: a STORED (that
+    # is, uncompressed) zip member leaves its text in the clear, and a real
+    # finding beats the weaker "go and review this yourself".
+    if _is_archive(data) or not any(
+        _is_plausible_text(text, kind) for text, kind in candidates
+    ):
         unscannable.append(path)
     for text, _kind in candidates:
         for n, line in enumerate(split_lines(text), 1):
@@ -982,6 +1140,176 @@ def _git_blob(path: str) -> bytes | None:
 
 # --- input modes -------------------------------------------------------------
 
+_C_QUOTE_SIMPLE = {
+    "a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92,
+}
+
+
+def _unquote_c_path(text: str) -> bytes:
+    """
+    The BYTES of a pathname git printed in its `+++ ` header.
+
+    `core.quotePath` is ON BY DEFAULT, so git wraps any non-ASCII path in quotes
+    and renders each byte outside ASCII as an octal escape — `\\377` — plus the
+    usual `\\n`, `\\t`, `\\"` and `\\\\`. Recovering the bytes is what lets the
+    display be built and vetted the same way iter_staged_paths does it, instead
+    of guessing which escapes a display string might be hiding.
+
+    An unquoted path is already its own bytes under latin-1, which is how the
+    diff was decoded.
+    """
+    if not (len(text) >= 2 and text.startswith('"') and text.endswith('"')):
+        return text.encode("latin-1")
+
+    body, out, i = text[1:-1], bytearray(), 0
+    while i < len(body):
+        if body[i] != "\\":
+            out.extend(body[i].encode("latin-1"))
+            i += 1
+            continue
+        i += 1
+        if i >= len(body):            # trailing backslash: literal
+            out.append(92)
+            break
+        ch = body[i]
+        if ch in _C_QUOTE_SIMPLE:
+            out.append(_C_QUOTE_SIMPLE[ch])
+            i += 1
+        elif ch in "01234567":
+            digits = ""
+            while i < len(body) and len(digits) < 3 and body[i] in "01234567":
+                digits += body[i]
+                i += 1
+            out.append(int(digits, 8) & 0xFF)
+        else:                          # unknown escape: keep both characters
+            out.append(92)
+            out.extend(ch.encode("latin-1"))
+            i += 1
+    return bytes(out)
+
+
+def _line_readings(data: bytes, allow_lossy: bool = True) -> tuple[str, ...]:
+    """
+    Every reading of ONE line's raw bytes that a rule must be tried against.
+
+    `allow_lossy` is False for PATHNAMES, and that asymmetry is deliberate. The
+    byte-dropping reading finds an identifier split by an undecodable byte, but
+    it finds it by JOINING what the byte separated — and joining is exactly how
+    a false positive is manufactured. `rapport-2026\\xb40812\\xb41530.txt`,
+    `photo-2026\\xe90812\\xe91530.jpg` and `backup_1024\\xff2048\\xff4096.bin` all
+    collapse into a twelve-digit run and block.
+
+    In CONTENT that is an acceptable trade, because the allow marker can waive it
+    on the offending line. Pathnames are scanned with honor_allow_marker=False by
+    design — a marker in a filename would be a permanent committed exemption —
+    so there the same false positive is UNWAIVABLE, and the only remedy is
+    renaming the file. This file's own comments already call an unwaivable false
+    positive the worst kind; it is why underscore was dropped from the separator
+    class after `backup_2026_0812_1530.log` was blocked.
+
+    What that costs is recorded as an accepted gap: an identifier split by an
+    undecodable byte inside a FILENAME is not detected. Reaching it needs a
+    hand-crafted git index — macOS refuses to create such a name (Errno 92) — and
+    it is pinned by test_a_split_identifier_in_a_pathname_is_an_accepted_gap.
+
+    The blob path gets this from _decode_candidates, which reads a whole file six
+    ways. A diff line cannot use that: the readings are per-file there, and
+    decoding a diff as utf-16 or cp500 would shred git's own '+' and '@@'
+    framing along with the content. So the framing is parsed once in latin-1 —
+    lossless, and git emits it as ASCII — and each added line's bytes are re-read
+    here instead.
+
+    Deliberately NARROWER than _decode_candidates: the wide encodings are
+    omitted. A utf-16 or utf-32 identifier reaching this path still blocks, but
+    NOT for the reason an earlier version of this comment gave. It claimed the
+    NUL bytes make git call the file binary and route it to the blob path; that
+    holds only when the NULs fall inside git's first-8000-byte window, so a file
+    with clean ASCII first and utf-16 later is TEXT and does arrive here.
+
+    The actual protection is that those NUL bytes are ASCII, so the line takes
+    the fast path below and _strip_invisible removes them as category Cc, leaving
+    the identifier contiguous. Verified for utf-16-be, utf-16-le and utf-32-be.
+    Recorded precisely because the two rationales fail differently: if the Cc
+    strip is ever narrowed, this opens silently.
+    """
+    # The common case by an enormous margin, and identical to the old behaviour:
+    # one reading, no extra work.
+    #
+    # This is the ONLY gate, and it is exact rather than a threshold. Every
+    # letter and digit encodes to a byte >= 0x80 in all four EBCDIC codecs
+    # (asserted by test_every_ebcdic_alphanumeric_is_a_high_byte), and every rule
+    # this scanner has needs at least one letter or digit to match. So an ASCII
+    # line cannot hide an EBCDIC identifier, and skipping the extra readings for
+    # it narrows cost only.
+    #
+    # An earlier version gated on a byte in 0xF0-0xF9 — EBCDIC's digits — which
+    # was a REAL BYPASS, caught in QA review: it reasoned from account IDs, which
+    # need twelve digits, and generalised to identifiers that need none. A PEM
+    # header has no digits at all, and an access key need not have any, so both
+    # scanned clean in cp500 through --staged-diff while --files caught them. Two
+    # modes disagreeing about the same question is the shape of nearly every bug
+    # ever found in this file.
+    if data.isascii():
+        return (data.decode("ascii"),)
+
+    out: list[str] = []
+
+    def add(text: str | None) -> None:
+        if text is not None and text not in out:
+            out.append(text)
+
+    strict = _decode(data, "utf-8")
+    add(strict)
+    if strict is None:
+        # Only reachable for a line that is not valid UTF-8, which is exactly
+        # when the two disagree — see the lossy-reading note in
+        # _decode_candidates for why dropping bytes finds what preserving them
+        # cannot. Withheld from pathnames; see this function's docstring.
+        if allow_lossy:
+            add(data.decode("utf-8", errors="ignore"))
+        # LOAD-BEARING, and not for the reason first supposed. An earlier comment
+        # here reasoned that dropping bytes can never swallow a character of an
+        # ASCII identifier — true, and beside the point. Dropping does not need
+        # to swallow the identifier to destroy the match; it only needs to JOIN
+        # it to what sits next to it:
+        #
+        #   "9" \xff <12-digit id>  -> dropped: a 13-digit run, and RE_TWELVE is
+        #                              anchored (?<!\d)...(?!\d), so it misses.
+        #   "keyX" \xff <access key> -> dropped: the (?<![0-9A-Za-z]) lookbehind
+        #                              now sees 'X', so aws-unique-id misses.
+        #
+        # latin-1 preserves the byte as a character, which keeps the boundary
+        # intact and matches both. The two readings fail in opposite directions,
+        # which is exactly why both are here. Pinned by
+        # test_byte_dropping_can_fuse_an_identifier_and_latin_1_catches_it.
+        add(data.decode("latin-1"))
+    # ALL FOUR EBCDIC codecs, matching _decode_candidates exactly.
+    #
+    # An earlier version decoded only cp037, on the argument that the four agree
+    # on every character an identifier can be built from — which is true, and
+    # insufficient. Detection is not the only thing a reading decides: it also
+    # decides EXEMPTION. The codecs disagree on punctuation (cp500 on 5
+    # characters, cp1026 on 14), and some of those characters are exactly the
+    # ones that make a bucket capture read as a placeholder rather than a name.
+    #
+    # Byte 0xBA is '[' in cp037 and '¬' in cp500. A bucket segment beginning with
+    # it reads as '[realbucketname' under cp037 — a PLACEHOLDER_BUCKET_STARTS
+    # prefix, so exempt — and as '¬realbucketname' under cp500, which is a hit.
+    # Keeping only the exempting reading loses the finding outright. Twelve more
+    # such bytes exist across the family, some truncating a capture at a
+    # terminator instead. Verified: rc 0 through --staged-diff, rc 1 through
+    # --files, which is the two-modes-disagree shape again.
+    #
+    # No realistic bucket name can begin with those characters, so this was not a
+    # demonstrated disclosure — but the invariant is load-bearing for any future
+    # rule, and three extra decodes on non-ASCII lines only is a small price for
+    # not having to re-derive it. The isascii() fast path above carries the whole
+    # perf argument on its own.
+    for encoding, kind in CANDIDATE_ENCODINGS:
+        if kind == "ebcdic":
+            add(_decode(data, encoding))
+    return tuple(out)
+
 
 def iter_staged_diff_lines():
     """
@@ -1002,11 +1330,36 @@ def iter_staged_diff_lines():
     Position is unambiguous where content is not. Inside a hunk every line
     carries a +/-/space/backslash prefix, so a bare '@@' or 'diff --git ' can
     only be structure; outside a hunk there is no content to confuse.
+
+    THE DIFF IS PARSED AS LATIN-1, NOT UTF-8. This used to go through _git_text,
+    which decodes with errors="replace", and that single reading was the whole
+    of two separate holes:
+
+      * A file in an EBCDIC encoding (cp037/cp500/cp1026/cp424) contains no NUL
+        byte, so git classifies it as TEXT and it arrives here rather than at the
+        blob path — the only place that reads a file more than one way. Its
+        digits, bytes 0xF0-0xF9, became U+FFFD and no rule matched. bugs/1 is
+        worth correcting on this point: it concluded that adding cp500 to
+        CANDIDATE_ENCODINGS "would change nothing" because the gap is the code
+        path. The code path is a gap, but the encodings were missing too — the
+        candidate union produced exactly one surviving reading for a cp500 blob
+        (latin-1) and it missed. Both had to change.
+      * One invalid byte inside a digit run became U+FFFD and split it, while
+        numstat still reported an ordinary '1\\t0' row, so the undiffed-file
+        fallback that exists to catch a file the diff cannot show never fired.
+
+    latin-1 is a 1:1 byte mapping, so decoding here loses nothing and each added
+    line can be handed back to _line_readings as its original bytes. git's own
+    framing — 'diff --git ', '+++ ', '@@', the +/- prefixes — is ASCII, so it
+    survives this reading intact; content that is not ASCII is not framing.
+
+    The displayed PATH is decoded as utf-8 separately, since latin-1 would render
+    a non-ASCII pathname as mojibake in the block message.
     """
-    out = _git_text(
+    out = _git(
         ["diff", "--cached", "--unified=0", "--no-color", *NO_CUSTOM_DIFF],
         "the staged diff",
-    )
+    ).decode("latin-1")
 
     path, lineno, in_hunk = None, 0, False
     for raw in split_lines(out):
@@ -1016,8 +1369,13 @@ def iter_staged_diff_lines():
             continue
         if not in_hunk:
             if raw.startswith("+++ "):
-                target = raw[4:]
-                path = target[2:] if target.startswith("b/") else target
+                # Un-quote FIRST: with core.quotePath on, the 'b/' prefix sits
+                # inside the quotes, so testing for it on the quoted string
+                # never matched and the prefix was reported as part of the name.
+                target = _unquote_c_path(raw[4:])
+                if target.startswith(b"b/"):
+                    target = target[2:]
+                path = target.decode("utf-8", errors="replace")
                 continue
             if raw.startswith("--- "):
                 continue
@@ -1027,7 +1385,9 @@ def iter_staged_diff_lines():
             in_hunk = True
             continue
         if raw.startswith("+"):
-            yield path, lineno, raw[1:]
+            # One line number per LINE, not per reading.
+            for content in _line_readings(raw[1:].encode("latin-1")):
+                yield path, lineno, content
             lineno += 1
 
 
@@ -1038,8 +1398,24 @@ def iter_staged_paths():
     Deletions are excluded (--diff-filter=ACMRT): that path is already in
     history, and refusing the commit that removes it helps nobody. For a rename
     only the new name is checked, for the same reason.
+
+    READ AS BYTES, for the same reason iter_staged_diff_lines is. A pathname is a
+    publication sink exactly as a file body is — that is why this iterator
+    exists — but the invalid-byte and EBCDIC fixes originally landed only in the
+    content iterator, leaving this one on a single utf-8/replace reading. With
+    `--name-only -z` git does no C-quoting, so raw bytes arrived here and one
+    undecodable byte inside a digit run mangled the name into U+FFFD and split
+    it. Verified rc 0 for `aws-cloudtrail-logs-9876543\\xff21098-us-east-2.md`
+    and for an access key split the same way, while both block without the byte.
+
+    macOS refuses to CREATE such a filename, but the git index accepts it, so it
+    arrives via a Linux-authored branch, a cherry-pick, `git apply`, or a crafted
+    index — and this scanner is installed in repos that see CI.
+
+    The display name keeps its own utf-8/replace decode: it is what gets printed,
+    and it is what redact() then masks.
     """
-    out = _git_text(
+    out = _git(
     # T (typechange) was missing until 2026-08-12, and its absence hid a file
     # from EVERY iterator at once. A path that flips blob type — symlink to
     # regular file — and whose new content yields no diff text (binary, or
@@ -1050,9 +1426,16 @@ def iter_staged_paths():
         ["diff", "--cached", "--name-only", "--diff-filter=ACMRT", "-z", *NO_CUSTOM_DIFF],
         "the staged path list",
     )
-    for path in out.split("\0"):
-        if path:
-            yield path, None, path
+    for raw in out.split(b"\0"):
+        if raw:
+            # Display is decoded ONCE, here, from the true bytes. Every
+            # printed path goes through redact() in main(), and redact() can
+            # only reason about the artifacts this one transform produces —
+            # which is why the diff header is un-quoted to bytes first rather
+            # than printed in git's C-quoted form. See _unquote_c_path.
+            shown = raw.decode("utf-8", errors="replace")
+            for reading in _line_readings(raw, allow_lossy=False):
+                yield shown, None, reading
 
 
 def _staged_numstat():
@@ -1124,13 +1507,31 @@ def iter_file_lines(paths, unscannable: list[str]):
     question, which is exactly the contradiction that produced the original bug.
     """
     for p in paths:
+        # THE THIRD DISPLAY ROUTE, and the one that broke the claim that there is
+        # only one. The git-sourced iterators were normalised to decode a path
+        # exactly once, utf-8/replace, so redact()'s U+FFFD handling covers them.
+        # An argv path never went through that: CPython decodes sys.argv with
+        # surrogateescape, so an undecodable byte arrives as a LONE SURROGATE
+        # (U+DCFF), stderr renders it as a backslash escape, and the digit run is
+        # split by something redact() has never heard of. Verified: `--files` on
+        # a name holding one \xff printed twelve digits of an account ID, while
+        # the same name without the byte masked correctly.
+        #
+        # Re-encoding through surrogateescape recovers the original bytes, and
+        # decoding them utf-8/replace puts this route on the same single
+        # transform as the other two. Normalising the route, not extending the
+        # strip — the alternative is a list where a category is needed, which is
+        # how the C-quoted form was missed one round earlier.
+        #
+        # `p` itself is still what gets opened: only the DISPLAY is normalised.
+        shown = p.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
         try:
             with open(p, "rb") as fh:
                 data = fh.read()
         except OSError:
-            unscannable.append(p)
+            unscannable.append(shown)
             continue
-        yield from _iter_decoded_lines(p, data, unscannable)
+        yield from _iter_decoded_lines(shown, data, unscannable)
 
 
 def iter_stdin_lines(label):
@@ -1152,6 +1553,11 @@ def iter_stdin_lines(label):
     message. A commit-msg hook cannot see the cleanup mode, so it cannot know
     which case it is in, and the only safe answer is to scan the whole thing.
     """
+    # Normalised for the same reason as iter_file_lines: --label is argv too, so
+    # it reaches here with surrogates rather than U+FFFD. The pre-commit hook
+    # passes a fixed ASCII label, which is why this has never mattered — but the
+    # route is what is being guaranteed, not the current caller's good behaviour.
+    label = label.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
     for n, line in enumerate(split_lines(sys.stdin.read()), 1):
         yield label, n, line
 
@@ -1165,7 +1571,7 @@ BLOCK_HEADER = {
 }
 
 
-def _report_hits(hits) -> None:
+def _report_hits(hits, allow_marker_usable: bool = True) -> None:
     e = sys.stderr
     print("", file=e)
     for location, rule in hits:
@@ -1179,8 +1585,16 @@ def _report_hits(hits) -> None:
     print("  CFS docs sync into GitHub issues, which are exactly as public as the", file=e)
     print("  repo. Check with: gh repo view --json visibility", file=e)
     print("", file=e)
-    print("  If a line is genuinely fine — a real UUID whose tail is 12 digits, or a", file=e)
-    print(f"  non-AWS 12-digit number — append '{ALLOW_MARKER}' to that line.", file=e)
+    if allow_marker_usable:
+        print("  If a line is genuinely fine — a real UUID whose tail is 12 digits, or a", file=e)
+        print(f"  non-AWS 12-digit number — append '{ALLOW_MARKER}' to that line.", file=e)
+    else:
+        # Saying "append the marker" here would be advice that does not work, and
+        # worse, advice whose only effect is to put the marker NEXT TO the
+        # identifier in the published text. Name the real remedy instead.
+        print(f"  '{ALLOW_MARKER}' does NOT apply here (--no-allow-marker): this text is", file=e)
+        print("  itself the published artifact, so a marker would ship alongside the", file=e)
+        print("  identifier rather than excusing it. Edit the text.", file=e)
     print("  A hit marked (pathname) is in the FILE NAME; rename the file instead.", file=e)
     print("  Do not blanket-bypass with --no-verify.", file=e)
 
@@ -1201,6 +1615,16 @@ def _report_unscannable(paths: list[str]) -> None:
     print("", file=e)
     print("  Review them yourself, then acknowledge for this commit only:", file=e)
     print(f"    {ALLOW_UNSCANNABLE_ENV}=1 git commit ...", file=e)
+    # A name is withheld when the name ITSELF could reassemble into an
+    # identifier. That is the safe error, but it leaves this list unactionable
+    # for exactly the file the reader has to go and look at — so point at the
+    # one command that will name it without this control being the thing that
+    # prints it.
+    if any(redact(p) == FULLY_REDACTED for p in paths):
+        print("", file=e)
+        print(f"  A path shown as {FULLY_REDACTED} was withheld because the NAME", file=e)
+        print("  itself may carry an identifier. List them yourself with:", file=e)
+        print("    git diff --cached --name-only", file=e)
 
 
 def main() -> int:
@@ -1218,6 +1642,17 @@ def main() -> int:
                       help="Scan text piped on stdin (e.g. a commit message).")
     ap.add_argument("--label", default="<stdin>", metavar="NAME",
                     help="Name to report for --stdin hits (default: <stdin>).")
+    # The allow-marker is a per-line escape hatch a human types beside one
+    # specific false positive in a FILE, where the marker is a note to the next
+    # reader and the file can be edited afterwards. Neither holds for a commit
+    # message: it is pushed verbatim, cannot be corrected without rewriting
+    # history, and the marker would be published in the same breath as the
+    # identifier it excused. `git commit -m "... 9876...  allow-identifier"`
+    # therefore committed clean — the escape hatch disarming the control in the
+    # one sink that has no undo. Same shape as the pathname case, which is why
+    # honor_allow_marker already existed; this exposes it to callers.
+    ap.add_argument("--no-allow-marker", action="store_true",
+                    help="Ignore the per-line allow-identifier marker entirely.")
     ap.add_argument("--version", action="store_true",
                     help="Print scanner version and exit.")
     args = ap.parse_args()
@@ -1261,7 +1696,8 @@ def main() -> int:
     hits: list[tuple[str, str]] = []
     seen_hits: set[tuple[str, str]] = set()
     for path, lineno, content, is_pathname in source:
-        rule = scan_line(content, honor_allow_marker=not is_pathname)
+        honor = not is_pathname and not args.no_allow_marker
+        rule = scan_line(content, honor_allow_marker=honor)
         if rule:
             shown = redact(path or "<unknown>")
             location = f"{shown} (pathname)" if is_pathname else f"{shown}:{lineno}"
@@ -1271,7 +1707,7 @@ def main() -> int:
 
     if hits:
         print(f"scan-identifiers: {BLOCK_HEADER[kind]}", file=sys.stderr)
-        _report_hits(hits)
+        _report_hits(hits, allow_marker_usable=not args.no_allow_marker)
         return 1
 
     # Checked only after a clean content scan, so a real identifier is always the
