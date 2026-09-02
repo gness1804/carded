@@ -46,6 +46,34 @@ msg_source="${2:-}"
 git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
 [ -n "$git_dir" ] || exit 0
 
+# A SEQUENCER OPERATION IS NOT A DRAFT COMMIT. Bail out before touching
+# anything, because neither this hook nor post-commit can tell one apart from a
+# real draft commit on its own: git reports $msg_source as "message" for
+# cherry-pick and revert, exactly as it does for `-m` and `-F`, so the source
+# filter further down passes them straight through.
+#
+# Two real failures came from that, both verified 2026-08-31:
+#   * DATA LOSS. A pending, uncommitted draft whose text happened to match the
+#     message of a cherry-picked commit was treated as "in use", so post-commit
+#     deleted the author's unsent draft. Nothing warned; the text was simply
+#     gone.
+#   * A hard abort mid-sequence. With a stale stamp, `git cherry-pick` died with
+#     "fatal: cherry-pick failed" and left CHERRY_PICK_HEAD behind, and the
+#     remedy this hook printed would have committed the DRAFT's text as the
+#     cherry-picked commit's message.
+#
+# In every one of these states the message is git's, not the author's, so there
+# is no draft question to adjudicate. Checked by state file rather than by
+# $msg_source because the state files are unambiguous and the source is not.
+if [ -e "$git_dir/CHERRY_PICK_HEAD" ] \
+  || [ -e "$git_dir/REVERT_HEAD" ] \
+  || [ -e "$git_dir/MERGE_HEAD" ] \
+  || [ -d "$git_dir/rebase-merge" ] \
+  || [ -d "$git_dir/rebase-apply" ] \
+  || [ -d "$git_dir/sequencer" ]; then
+  exit 0
+fi
+
 draft="$git_dir/COMMIT_MSG_DRAFT"
 base_file="$git_dir/COMMIT_MSG_DRAFT.base"
 
