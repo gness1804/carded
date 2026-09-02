@@ -7,7 +7,6 @@
 #   1. Blocks commits to protected branches (main/master/develop/prod/production).
 #   2. Blocks commits that introduce a "TEMP:" code comment.
 #   3. Runs the repo's linter(s) against changed files only (staged + dirty).
-#   4. Runs `cfs gh sync --non-interactive` when the repo is a GitHub project that uses CFS.
 #
 # Bypass intentionally with: git commit --no-verify
 
@@ -186,69 +185,6 @@ else
   echo "  Install it (brew install gitleaks), or commit with --no-verify" >&2
   echo "  knowingly." >&2
   exit 1
-fi
-
-# --- 5. Sync CFS issues with GitHub (only when applicable) -------------------
-# Runs `cfs gh sync --non-interactive --strict` only if: gh CLI is installed,
-# cfs CLI is installed, the origin remote is a GitHub repo, and a .cursor
-# directory exists.
-#   --non-interactive resolves content conflicts deterministically (strategy
-#     'newer': whichever side changed most recently wins) so a routine commit
-#     never stalls on a conflict prompt in this non-TTY context. Conflicts that
-#     genuinely can't be auto-resolved (e.g. a new issue with no category label)
-#     are *deferred* with an advisory note, not blocked.
-#   --strict exits 1 only on real sync errors (GitHub API or file failures) and
-#     blocks the commit so they get fixed.
-# Note: older cfs versions (< 0.14) don't support --non-interactive; if the
-# sync fails with an "unknown option" style error, drop that flag (or upgrade
-# cfs). The /pre-commit skill asks before upgrading an existing hook to this
-# form.
-#
-# GOTCHA — "gh not authenticated" is usually NOT a logout. gh stores its token
-# in the macOS Keychain (`gh auth status` shows "(keyring)"). A sandboxed shell
-# — e.g. an AI coding agent's tool call — cannot reach the Keychain, so gh
-# reports "The token in keyring is invalid", which is indistinguishable from
-# being logged out. GPG/SSH commit signing fails the same way. If this sync
-# fails that way, the fix is that the USER runs the commit from their own
-# terminal — not the agent. Do NOT re-run `gh auth login`, do NOT disable the
-# agent's sandbox to work around it, do NOT add a `gh auth status` guard that
-# skips the sync (that trades a loud failure for silent CFS/GitHub drift), and
-# do NOT switch gh to plaintext token storage.
-#
-# VISIBILITY GUARD: `cfs gh sync` pushes CFS document BODIES verbatim into GitHub
-# issues, and an issue is exactly as public as its repo. A hardening doc — account
-# ID, 15 access-key IDs, ARNs, and the name of a bucket holding personal data —
-# was published this way because the repo was public and nothing surfaced that
-# fact. CFS docs *feel* local; they are not.
-#
-# So: refuse to sync when the repo is PUBLIC unless explicitly opted in by
-# creating .cursor/.allow-public-cfs-sync. This fails safe (skips publishing)
-# rather than failing closed (blocking the commit), because a public repo is a
-# legitimate configuration — it just should not silently publish planning docs.
-if command -v gh >/dev/null 2>&1 \
-  && command -v cfs >/dev/null 2>&1 \
-  && git remote get-url origin 2>/dev/null | grep -qi 'github' \
-  && [ -d .cursor ]; then
-  repo_visibility="$(gh repo view --json visibility -q .visibility 2>/dev/null || echo UNKNOWN)"
-  # Tested against KNOWN-SAFE values rather than against PUBLIC. The obvious
-  # form — `if [ "$v" = "PUBLIC" ]` — fails OPEN: when `gh` errors, rate-limits,
-  # or cannot reach the Keychain, visibility is UNKNOWN, which is not "PUBLIC",
-  # so control falls through to the else branch and publishes. That is exactly
-  # the case this guard exists for, since the Keychain failure is routine in a
-  # sandboxed agent shell. "I could not determine visibility" must mean "do not
-  # publish", which is what this inverted test gives.
-  if [ "$repo_visibility" != "PRIVATE" ] && [ "$repo_visibility" != "INTERNAL" ] \
-    && [ ! -f .cursor/.allow-public-cfs-sync ]; then
-    echo "pre-commit: SKIPPING 'cfs gh sync' — repo visibility is '$repo_visibility' (not confirmed private)." >&2
-    echo "  CFS syncs document bodies verbatim into GitHub issues, which inherit repo" >&2
-    echo "  visibility. Publishing planning/security docs to a public issue is rarely intended." >&2
-    echo "  If it IS intended here, opt in with: touch .cursor/.allow-public-cfs-sync" >&2
-  else
-    if ! cfs gh sync --non-interactive --strict; then
-      echo "pre-commit: 'cfs gh sync --non-interactive --strict' hit real sync errors — fix them (or commit with --no-verify) and rerun." >&2
-      exit 1
-    fi
-  fi
 fi
 
 exit 0
