@@ -727,6 +727,13 @@ a {
   flex-wrap: wrap;
 }
 
+.download-actions__hint {
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+  line-height: var(--lh-body);
+  margin: var(--space-2) 0 0;
+}
+
 /* ── 12. Responsive overrides (tablet+) ──────────────────── */
 @media (min-width: 540px) {
   .site-main {
