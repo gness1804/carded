@@ -19,7 +19,7 @@ The validation gate in `baml_src/business_card.baml` is load-bearing. Every fiel
 - **FastAPI** — web framework and API layer
 - **Jinja2** — server-side HTML templates
 - **BAML** — structured LLM output (function definitions in `baml_src/`)
-- **Anthropic Claude Sonnet 4** (`claude-sonnet-4-20250514`) — vision model for card extraction
+- **Anthropic Claude Sonnet 5** (`claude-sonnet-5`) — vision model for card extraction (Sonnet 4 was retired June 15, 2026)
 - **Fernet (cryptography)** — BYOK session encryption in `session.py`
 
 ## Where the Plan Lives
@@ -46,7 +46,7 @@ carded/
 ├── validation/                 # Prompt injection defense
 ├── baml_src/                   # BAML source definitions
 │   ├── business_card.baml      # BusinessCard model + ExtractBusinessCard function
-│   ├── clients.baml            # LLM client config (CustomSonnet4)
+│   ├── clients.baml            # LLM client config (CustomSonnet5)
 │   └── generators.baml         # Code generation config
 ├── baml_client/                # Auto-generated Python client (DO NOT edit manually)
 ├── static/                     # CSS, JS, images (Phase 4 — Kristy)

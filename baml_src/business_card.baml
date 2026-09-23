@@ -79,7 +79,7 @@ class BusinessCard {
 }
 
 function ExtractBusinessCard(image: image) -> BusinessCard {
-    client "CustomSonnet4"
+    client "CustomSonnet5"
     prompt #"
         {{ _.role("user") }}
         You will analyze a business card image and extract contact information
