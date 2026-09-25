@@ -65,6 +65,41 @@ class TestEncryptDecrypt:
         token = session.encrypt_api_key(key)
         assert session.decrypt_api_key(token[:10]) is None
 
+    def test_decrypt_rejects_token_older_than_ttl(self):
+        import time
+
+        old_time = int(time.time()) - 1000
+        token = session._fernet.encrypt_at_time(
+            b"sk-ant-old", old_time
+        ).decode()
+        # 1000s old, ttl 500s -> expired -> None
+        assert session.decrypt_api_key(token, ttl=500) is None
+        # Same token within a larger ttl still decrypts.
+        assert session.decrypt_api_key(token, ttl=2000) == "sk-ant-old"
+
+    def test_decrypt_default_ttl_is_90_days(self):
+        import time
+
+        assert session.MAX_TOKEN_TTL == 90 * 24 * 60 * 60
+        now = int(time.time())
+        fresh = session._fernet.encrypt_at_time(
+            b"sk-ant-fresh", now - 89 * 24 * 60 * 60
+        ).decode()
+        stale = session._fernet.encrypt_at_time(
+            b"sk-ant-stale", now - 91 * 24 * 60 * 60
+        ).decode()
+        assert session.decrypt_api_key(fresh) == "sk-ant-fresh"
+        assert session.decrypt_api_key(stale) is None
+
+    def test_decrypt_ttl_none_disables_expiry(self):
+        import time
+
+        old_time = int(time.time()) - 400 * 24 * 60 * 60
+        token = session._fernet.encrypt_at_time(
+            b"sk-ant-old", old_time
+        ).decode()
+        assert session.decrypt_api_key(token, ttl=None) == "sk-ant-old"
+
 
 # ---------------------------------------------------------------------------
 # mask_api_key

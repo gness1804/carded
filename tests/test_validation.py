@@ -4,7 +4,6 @@ Both modules were previously untested. These cover the public API of each
 class, including edge cases relevant to the prompt-injection defense layer.
 """
 
-import pytest
 
 from validation.detector import PromptInjectionDetector
 from validation.sanitizer import InputSanitizer

@@ -37,6 +37,7 @@ function initRefs() {
     keyEntry:       document.getElementById('key-entry'),
     keyForm:        document.getElementById('key-form'),
     apiKeyInput:    document.getElementById('api-key-input'),
+    keyPersistenceSelect: document.getElementById('key-persistence-select'),
     saveKeyBtn:     document.getElementById('save-key-btn'),
     changeKeyBtn:   document.getElementById('change-key-btn'),
     keyError:       document.getElementById('key-error'),
@@ -203,7 +204,10 @@ async function setApiKey(key) {
     const resp = await fetch('/session/key', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: key }),
+      body: JSON.stringify({
+        api_key: key,
+        persistence: refs.keyPersistenceSelect ? refs.keyPersistenceSelect.value : '7d',
+      }),
       credentials: 'same-origin',
     });
 
