@@ -1,13 +1,15 @@
 ---
 description: Cut Carded over from the default *.onrender.com domain to a custom domain
-  (carded.io or fallback). Add the custom domain in Render, configure Cloudflare DNS,
+  (name TBD; carded.io is taken). Add the custom domain in Render, configure Cloudflare DNS,
   verify TLS, and live-smoke-test.
 github_issue: 2
 name: custom-domain-carded-io-cutover
 status: open
 type: feature
 ---
-# Feature — Custom Domain Cutover (carded.io)
+# Feature — Custom Domain Cutover (domain TBD)
+
+> **Update 2026-09-25:** `carded.io` is **taken and is not an option.** A new domain has not been chosen yet. Everywhere below, `<domain>` stands for whatever is picked. The filename and `name:` still say `carded-io` for continuity only. Also note Carded may move from Render to AWS (tracked separately in Todoist), which would change the Render/Cloudflare steps below.
 
 ## Background
 
@@ -17,16 +19,16 @@ The Phase 5 runbook (`.cursor/docs/2-phase-5-deployment-runbook.md` § "Step 3 �
 
 ## Acceptance criteria
 
-- [ ] `carded.io` is registered (or a fallback: `carded.app`, `getcarded.io`, etc.).
-- [ ] Custom domain added in Render dashboard → service → Settings → Custom Domains. Both apex (`carded.io`) and `www.carded.io` if desired.
+- [ ] A domain is chosen and registered. **Not `carded.io` (taken).** Check availability before settling on any candidate.
+- [ ] Custom domain added in Render dashboard → service → Settings → Custom Domains. Both apex (`<domain>`) and `www.<domain>` if desired.
 - [ ] Cloudflare DNS configured:
   - Apex (`@`): CNAME → `<service>.onrender.com` (Cloudflare apex-CNAME flattening). DNS-only (gray cloud) initially for cert issuance.
   - `www`: CNAME → `<service>.onrender.com`. DNS-only initially.
 - [ ] Render shows the domain as **Verified** and TLS cert as **Issued**.
 - [ ] (Optional) Flip Cloudflare proxy to orange-cloud once cert issues — purely a CDN/WAF preference, not required.
 - [ ] Live smoke test from the custom domain:
-  - `curl -fsS https://carded.io/health` → `{"status":"ok"}`
-  - `GET https://carded.io/` → 200 with rendered HTML
+  - `curl -fsS https://<domain>/health` → `{"status":"ok"}`
+  - `GET https://<domain>/` → 200 with rendered HTML
   - Full browser test on the custom domain: BYOK key entry, real card upload, vCard download, Google CSV download.
   - iOS Safari test (HEIC upload from camera roll) + Android Chrome test.
 
@@ -34,7 +36,7 @@ The Phase 5 runbook (`.cursor/docs/2-phase-5-deployment-runbook.md` § "Step 3 �
 
 - Migrating off Cloudflare for DNS.
 - Adding a CDN tier in front of Render (orange-cloud flip is optional, not required).
-- Email / MX records for `carded.io`.
+- Email / MX records for the new domain.
 
 ## Dependencies
 
