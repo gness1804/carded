@@ -8,7 +8,6 @@ Environment variables are set BEFORE importing app to ensure session.py and
 app.py pick up the correct secrets at module load time.
 """
 
-import io
 import os
 
 # Set test env vars before any app import so module-level code in session.py
@@ -188,6 +187,67 @@ class TestSetSessionKey:
         response = client.post("/session/key", json={"api_key": _VALID_KEY})
         assert response.status_code == 200
         assert response.json()["is_owner"] is False
+
+
+class TestKeyPersistence:
+    """Cookie lifetime follows the user's persistence choice.
+
+    Mirrors Receipt Ranger's three key-persistence options.
+    """
+
+    @staticmethod
+    def _set_cookie_header(payload: dict) -> str:
+        response = client.post("/session/key", json=payload)
+        assert response.status_code == 200
+        return response.headers.get("set-cookie", "").lower()
+
+    def test_default_is_7_days(self):
+        header = self._set_cookie_header({"api_key": _VALID_KEY})
+        assert f"max-age={7 * 24 * 60 * 60}" in header
+
+    def test_explicit_7_days(self):
+        header = self._set_cookie_header(
+            {"api_key": _VALID_KEY, "persistence": "7d"}
+        )
+        assert f"max-age={7 * 24 * 60 * 60}" in header
+
+    def test_90_days(self):
+        header = self._set_cookie_header(
+            {"api_key": _VALID_KEY, "persistence": "90d"}
+        )
+        assert f"max-age={90 * 24 * 60 * 60}" in header
+
+    def test_session_only_has_no_max_age_or_expires(self):
+        header = self._set_cookie_header(
+            {"api_key": _VALID_KEY, "persistence": "session"}
+        )
+        assert "carded_session" in header
+        assert "max-age" not in header
+        assert "expires" not in header
+        assert "httponly" in header
+
+    def test_invalid_persistence_rejected(self):
+        response = client.post(
+            "/session/key",
+            json={"api_key": _VALID_KEY, "persistence": "forever"},
+        )
+        assert response.status_code == 422
+        assert "set-cookie" not in response.headers
+
+    def test_expired_token_is_treated_as_no_session(self):
+        import time
+
+        import session as session_module_helper
+
+        old = int(time.time()) - 91 * 24 * 60 * 60
+        token = session_module_helper._fernet.encrypt_at_time(
+            _VALID_KEY.encode(), old
+        ).decode()
+        isolated = TestClient(app_module.app, raise_server_exceptions=False)
+        isolated.cookies.set("carded_session", token)
+        response = isolated.get("/")
+        assert response.status_code == 200
+        assert "key-entry--hidden" not in response.text
 
 
 # ---------------------------------------------------------------------------

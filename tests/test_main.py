@@ -7,12 +7,11 @@ RUN_INTEGRATION_TESTS=1 (Phase 6 concern).
 
 import base64
 import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from baml_client.types import (
-    AddressEntry,
     BusinessCard,
     EmailEntry,
     EmailType,

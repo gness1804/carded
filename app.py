@@ -25,6 +25,7 @@ import time
 import unicodedata
 import uuid
 from collections import deque
+from typing import Literal
 
 from cryptography.fernet import Fernet  # noqa: F401 — used in tests via import
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -47,7 +48,7 @@ from vcard_builder import build_vcf, vcf_filename
 from google_csv_builder import build_google_csv, csv_filename
 
 # Keep in sync with pyproject.toml [project] version. Surfaced via /health.
-__version__ = "0.3.3"
+__version__ = "0.4.0"
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,22 @@ _MAX_FILE_SIZE_BYTES: int = _MAX_FILE_SIZE_MB * 1024 * 1024
 
 # Secure cookie flag: True by default (prod HTTPS); allow override for local HTTP dev.
 _COOKIE_SECURE: bool = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
+
+# API-key cookie persistence durations (in seconds), mirroring Receipt Ranger.
+# SESSION_ONLY_MAX_AGE is None: the cookie is written with no Max-Age, so the
+# browser discards it when it closes. The server additionally rejects any token
+# older than session_module.MAX_TOKEN_TTL (90 days) regardless of the choice.
+SESSION_ONLY_MAX_AGE = None
+DEFAULT_KEY_MAX_AGE = 7 * 24 * 60 * 60  # 7 days
+# 90 days ("remember this device")
+REMEMBER_DEVICE_MAX_AGE = 90 * 24 * 60 * 60
+
+KEY_PERSISTENCE_MAX_AGES: dict[str, int | None] = {
+    "session": SESSION_ONLY_MAX_AGE,
+    "7d": DEFAULT_KEY_MAX_AGE,
+    "90d": REMEMBER_DEVICE_MAX_AGE,
+}
+DEFAULT_KEY_PERSISTENCE = "7d"
 
 # Rate limiting — sliding-window, per-client-IP, in-process. Defaults are
 # generous for a single-user BYOK app; tune via env in production. This is
@@ -241,6 +258,7 @@ async def _security_headers_middleware(request: Request, call_next):
 
 class KeySubmission(BaseModel):
     api_key: str
+    persistence: Literal["session", "7d", "90d"] = DEFAULT_KEY_PERSISTENCE
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -334,15 +352,21 @@ def _session_binding(request: Request) -> str:
     ).hexdigest()
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
-    """Attach the carded_session cookie to a response with correct security flags."""
+def _set_session_cookie(
+    response: Response, token: str, max_age: int | None = DEFAULT_KEY_MAX_AGE
+) -> None:
+    """Attach the carded_session cookie to a response with correct security flags.
+
+    max_age=None writes a browser-session cookie (no Max-Age/Expires), which
+    the browser discards when it closes.
+    """
     response.set_cookie(
         key="carded_session",
         value=token,
         httponly=True,
         secure=_COOKIE_SECURE,
         samesite="lax",
-        max_age=86400,
+        max_age=max_age,
         path="/",
     )
 
@@ -380,6 +404,10 @@ async def index(request: Request) -> Response:
 async def set_session_key(request: Request, submission: KeySubmission) -> Response:
     """Accept a BYOK Anthropic API key, validate its format, and store in cookie.
 
+    ``persistence`` controls the cookie lifetime: ``"session"`` (until the
+    browser closes), ``"7d"`` (default), or ``"90d"`` (remember this device).
+    Any other value is rejected with 422 by the Pydantic model.
+
     Returns:
         200 with JSON ``{"ok": true, "is_owner": <bool>, "masked_key": <str>}``
         and the Set-Cookie header on success.
@@ -408,7 +436,9 @@ async def set_session_key(request: Request, submission: KeySubmission) -> Respon
         status_code=200,
         content={"ok": True, "is_owner": owner_flag, "masked_key": masked},
     )
-    _set_session_cookie(response, token)
+    _set_session_cookie(
+        response, token, KEY_PERSISTENCE_MAX_AGES[submission.persistence]
+    )
     return response
 
 

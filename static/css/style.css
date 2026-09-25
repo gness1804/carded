@@ -383,6 +383,20 @@ a {
   font-size: 0.875rem;
 }
 
+.key-form__persistence {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+}
+
+.key-form__select {
+  width: auto;
+  font-size: var(--fs-small);
+}
+
 /* Inline error below key form */
 .key-error {
   font-size: var(--fs-small);

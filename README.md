@@ -18,7 +18,7 @@ baml-cli generate             # regenerate baml_client/ from baml_src/
 uvicorn app:app --reload
 ```
 
-Then open `http://localhost:8000` in your browser. You'll be prompted to enter your Anthropic API key before uploading a card.
+Then open `http://localhost:8000` in your browser. You'll be prompted to enter your Anthropic API key before uploading a card. When you save it, choose how long Carded keeps it: **This session only** (cleared when the browser closes), **7 days** (default), or **Remember this device (90 days)**. The key is Fernet-encrypted in an HttpOnly cookie, and the server rejects any token older than 90 days regardless of the cookie's lifetime.
 
 ### Run in Docker
 

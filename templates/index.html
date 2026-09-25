@@ -50,7 +50,7 @@
   >
     <h2 class="key-entry__heading">Enter your Anthropic API key</h2>
     <p class="key-entry__hint">
-      Your key is encrypted and stored in a session cookie. It never leaves your browser in plaintext.
+      Your key is encrypted and stored in a browser cookie for as long as you choose below (up to 90 days). It never leaves your browser in plaintext.
     </p>
     <div class="key-error key-error--hidden" id="key-error" role="alert" aria-live="polite"></div>
     <form class="key-form" id="key-form" novalidate>
@@ -72,6 +72,14 @@
           class="btn btn--primary"
           id="save-key-btn"
         >Save key</button>
+      </div>
+      <div class="key-form__persistence">
+        <label for="key-persistence-select" class="key-form__persistence-label">Keep my key for</label>
+        <select id="key-persistence-select" name="persistence" class="input key-form__select">
+          <option value="session">This session only</option>
+          <option value="7d" selected>7 days</option>
+          <option value="90d">Remember this device (90 days)</option>
+        </select>
       </div>
     </form>
   </div>
