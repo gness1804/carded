@@ -17,11 +17,11 @@ Extraction returned incorrect contact data for a real-world business card on the
 
 ## Errors
 
-1. **Email — hallucinated local-part (worst).** The actual local-part has the form `<short_prefix>.<role_word>3058@gmail.com`. The output replaced `<role_word>` with a substring matching the **city name** appearing in a different region of the card (the organization tagline), and dropped the `.` separator. The `3058` numeric suffix was preserved. The substituted substring does **not** appear anywhere in the email region of the card — this is inference, not transcription.
+1. **Email — hallucinated local-part (worst).** The actual local-part has the form `<short_prefix>.<role_word><digits>@<provider>`. The output replaced `<role_word>` with a substring matching the **city name** appearing in a different region of the card (the organization tagline), and dropped the `.` separator. The numeric suffix was preserved. The substituted substring does **not** appear anywhere in the email region of the card — this is inference, not transcription.
 
 2. **Phone — two wrong digits.** Both errors fall in the area-code / exchange portion of a 10-digit US number. Pattern smells like OCR ambiguity on a dense numeric run (e.g. `5↔0`, `8↔3`).
 
-3. **Title — OCR misread + punctuation.** A 2-syllable word starting with "P" was misread as a 3-syllable, visually similar "P—" word. A spurious period was also inserted after the abbreviated "Pct".
+3. **Title — OCR misread + punctuation.** A word in the title was misread as a visually similar, longer word. A spurious period was also inserted after an abbreviation.
 
 4. **Address — borderline.** The "City, State" line on the card is the organization's tagline beneath the org name, not a postal mailing address. The extractor populated the `address` field with it. Arguably a bug, arguably a reasonable interpretation — flagging for evaluation.
 
