@@ -402,6 +402,103 @@ def test_file_growing_after_stat_is_rejected(tmp_path, image, env_file,
 # ── BAML log level (QA finding: old test proved nothing) ────────────────────
 
 
+# ── Security review: terminal escapes + Ctrl-C ──────────────────────────────
+
+
+def test_terminal_safe_neutralizes_escape_sequences():
+    evil = "Bob\x1b]52;c;ZXZpbA==\x07 \x1b[31mRed\x1b[0m\u202eevil"
+    safe = card_to_vcf.terminal_safe(evil)
+    assert "\x1b" not in safe and "\x07" not in safe
+    assert "\u202e" not in safe  # bidi override is non-printable too
+    assert "Bob" in safe and "Red" in safe
+
+
+def test_terminal_safe_keeps_our_newlines_and_unicode():
+    assert card_to_vcf.terminal_safe("José\n  Café — ok") == \
+        "José\n  Café — ok"
+
+
+@pytest.mark.parametrize("name", [
+    "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",  # Persian, ZWNJ
+    "\u0915\u094d\u200d\u0937",                         # Devanagari, ZWJ
+    "\U0001f469\u200d\U0001f4bb",                       # emoji ZWJ sequence
+])
+def test_terminal_safe_keeps_legit_joiners(name):
+    assert card_to_vcf.terminal_safe(name) == name
+
+
+@pytest.mark.parametrize("bad", ["\u202e", "\u202a", "\u2066", "\u2069",
+                                 "\x1b", "\x07", "\x9b", "\u200b"])
+def test_terminal_safe_still_blocks_dangerous_format_chars(bad):
+    assert bad not in card_to_vcf.terminal_safe(f"a{bad}b")
+
+
+@pytest.mark.parametrize("brk", ["\n", "\r\n", "\r", "\u2028", "\x85"])
+def test_summary_field_cannot_fake_extra_lines(brk):
+    card = {"full_name": f"Bob{brk}  Email (work): attacker@evil.example",
+            "title": None, "organization": None, "department": None,
+            "phones": [], "emails": [], "urls": [], "address": None,
+            "linkedin": None, "twitter": None, "instagram": None,
+            "note": "line1\nline2"}
+    lines = card_to_vcf.summarize(card)
+    assert len(lines) == 2  # Name + Note, one line each
+    assert lines[0] == ("Name: Bob \u23ce   Email (work): "
+                        "attacker@evil.example")
+    assert lines[1] == "Note: line1 \u23ce line2"
+    printed = card_to_vcf.terminal_safe("\n".join(lines))
+    assert len(printed.split("\n")) == 2
+    assert not any(ln.lstrip().startswith("Email") for ln in
+                   printed.split("\n"))
+
+
+def test_printed_fields_contain_no_escape_codes(tmp_path, image, env_file,
+                                                capsys):
+    card = _make_valid_card(full_name="Jamie\x1b]8;;http://evil\x07Park",
+                            title="Founder\x1b[2J")
+    with patch("main.b", _mock_b(card)):
+        assert _run(image, tmp_path, env_file) == card_to_vcf.EXIT_OK
+    captured = capsys.readouterr()
+    assert "\x1b" not in captured.out + captured.err
+    assert "\x07" not in captured.out + captured.err
+
+
+def test_not_a_card_message_is_sanitized(tmp_path, image, env_file, capsys):
+    result = _make_not_a_card("nope\x1b]52;c;ZXZpbA==\x07")
+    with patch("main.b", _mock_b(result)):
+        _run(image, tmp_path, env_file)
+    assert "\x1b" not in capsys.readouterr().err
+
+
+def test_not_a_card_message_cannot_fake_extra_lines(tmp_path, image,
+                                                    env_file, capsys):
+    result = _make_not_a_card("a dog\nSaved: /tmp/fake.vcf")
+    with patch("main.b", _mock_b(result)):
+        _run(image, tmp_path, env_file)
+    err_lines = capsys.readouterr().err.strip().split("\n")
+    assert len(err_lines) == 1
+    assert "\u23ce" in err_lines[0]
+
+
+def test_json_output_escapes_controls(tmp_path, image, env_file, capsys):
+    card = _make_valid_card(full_name="Jamie\x1b[31mPark")
+    with patch("main.b", _mock_b(card)):
+        _run(image, tmp_path, env_file, "--json")
+    out = capsys.readouterr().out
+    assert "\x1b" not in out
+    assert "\\u001b" in out
+
+
+def test_ctrl_c_exits_130_without_traceback(monkeypatch, capsys):
+    def interrupted(_argv=None):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(card_to_vcf, "run", interrupted)
+    assert card_to_vcf.cli_main() == card_to_vcf.EXIT_INTERRUPTED
+    err = capsys.readouterr().err
+    assert "Interrupted." in err
+    assert "Traceback" not in err
+
+
 def test_shell_baml_log_is_overridden_without_verbose(monkeypatch):
     monkeypatch.setenv("BAML_LOG", "info")
     card_to_vcf.configure_baml_logging(verbose=False)

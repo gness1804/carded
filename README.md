@@ -53,7 +53,14 @@ python3 scripts/card_to_vcf.py path/to/card.heic --out-dir ~/Downloads
 - `--json` prints a machine-readable result. `--verbose` shows BAML's full
   prompt and response log, which contains card data, so it is off by default.
 - Exit codes: `0` ok, `1` config or file error, `2` bad command-line usage,
-  `3` not a card, `4` illegible, `5` unsupported image, `6` extraction failed.
+  `3` not a card, `4` illegible, `5` unsupported image, `6` extraction failed,
+  `130` interrupted (Ctrl-C).
+- Extracted text is treated as untrusted (card images can carry prompt
+  injection): control characters are neutralized before printing, each
+  field prints on exactly one line (embedded breaks show as `⏎`), and the
+  vCard builder escapes or strips line breaks so card text can't add extra
+  vCard fields. This hardening lives in `vcard_builder.py`, so the web app
+  gets it too.
 - Without `--verbose`, BAML logging is forced to `error` (even if your shell
   sets `BAML_LOG`; `warn` still prints the full prompt when a call fails)
   and error tracebacks are hidden, so card data and request

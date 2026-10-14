@@ -23,6 +23,7 @@ Exit codes:
     4  business card is illegible
     5  unsupported or unreadable image format
     6  extraction failed (timeout or upstream error)
+  130  interrupted (Ctrl-C)
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ EXIT_NOT_A_CARD = 3
 EXIT_ILLEGIBLE = 4
 EXIT_UNSUPPORTED = 5
 EXIT_EXTRACTION_FAILED = 6
+EXIT_INTERRUPTED = 130  # conventional 128 + SIGINT
 
 KEY_NAMES = ("OWNER_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
 DEFAULT_MAX_FILE_SIZE_MB = 10.0
@@ -154,13 +156,54 @@ def read_capped(path: Path, limit: int) -> bytes:
     return data
 
 
+#: Format characters (Unicode category Cf) that legitimate names need:
+#: ZWNJ (U+200C) and ZWJ (U+200D) are used in Persian/Indic scripts and emoji
+#: sequences. Every other non-printable character -- C0/C1 controls (ESC,
+#: BEL), bidi overrides (U+202A-U+202E, U+2066-U+2069), etc. -- stays blocked.
+_TERMINAL_ALLOWED_FORMAT_CHARS = frozenset("\u200c\u200d")
+
+
+def terminal_safe(text: str) -> str:
+    """Neutralize control characters before printing LLM-derived text.
+
+    Card text is attacker-controllable (prompt injection via the image), so
+    an extracted field could carry ANSI/OSC escape sequences -- e.g. OSC 52
+    to write the clipboard, or OSC 8 to plant a disguised hyperlink. Every
+    non-printable character except the newlines we insert ourselves (and
+    the joiners in ``_TERMINAL_ALLOWED_FORMAT_CHARS``) is replaced with
+    U+FFFD, so the sequence is visible but inert. Newlines *inside* field
+    values are flattened earlier, by :func:`summarize`.
+    """
+    return "\n".join(
+        "".join(
+            ch if ch.isprintable() or ch in _TERMINAL_ALLOWED_FORMAT_CHARS
+            else "\ufffd"
+            for ch in line
+        )
+        for line in text.split("\n")
+    )
+
+
+def _one_display_line(value: Any) -> str:
+    """Collapse any line break in a field value to a visible ``⏎`` marker.
+
+    Without this, a card field like ``"X\\n  Email (work): evil@example"``
+    would print as two lines and fake an extra field in the summary.
+    ``str.splitlines`` honours every Unicode line-break variant.
+    """
+    return " \u23ce ".join(str(value).splitlines())
+
+
 def summarize(card: dict[str, Any]) -> list[str]:
-    """Human-readable lines describing the extracted fields."""
+    """Human-readable lines describing the extracted fields.
+
+    Each field is guaranteed to occupy exactly one output line.
+    """
     lines: list[str] = []
 
     def add(label: str, value: Any) -> None:
         if value:
-            lines.append(f"{label}: {value}")
+            lines.append(f"{label}: {_one_display_line(value)}")
 
     add("Name", card.get("full_name"))
     add("Title", card.get("title"))
@@ -233,10 +276,11 @@ def run(argv: list[str] | None = None) -> int:
 
     def emit(status: str, message: str, **extra: Any) -> None:
         if args.json:
+            # json.dumps escapes every control character, so this is safe.
             print(json.dumps({"status": status, "message": message, **extra}))
         else:
             stream = sys.stdout if status == "ok" else sys.stderr
-            print(message, file=stream)
+            print(terminal_safe(message), file=stream)
 
     try:
         image_path = args.image.expanduser()
@@ -309,11 +353,14 @@ def run(argv: list[str] | None = None) -> int:
     finally:
         main_logger.disabled = previously_disabled
 
+    # result.message is LLM output: flatten it so it can't fake extra lines.
     if isinstance(result, NotABusinessCard):
-        emit("not_a_card", f"Not a business card: {result.message}")
+        emit("not_a_card",
+             f"Not a business card: {_one_display_line(result.message)}")
         return EXIT_NOT_A_CARD
     if isinstance(result, Illegible):
-        emit("illegible", f"Card is illegible: {result.message}")
+        emit("illegible",
+             f"Card is illegible: {_one_display_line(result.message)}")
         return EXIT_ILLEGIBLE
     if not isinstance(result, Valid):
         emit("extraction_failed",
@@ -346,5 +393,21 @@ def run(argv: list[str] | None = None) -> int:
     return EXIT_OK
 
 
+def cli_main() -> int:
+    """Entry point: like :func:`run`, but Ctrl-C exits quietly with 130.
+
+    Named ``cli_main`` (not ``main``) to avoid confusion with the repo's
+    ``main`` module, which run() imports.
+
+    Without this, KeyboardInterrupt (not an Exception subclass, so the
+    catch-alls in run() don't see it) prints a raw traceback.
+    """
+    try:
+        return run()
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        return EXIT_INTERRUPTED
+
+
 if __name__ == "__main__":
-    sys.exit(run())
+    sys.exit(cli_main())
