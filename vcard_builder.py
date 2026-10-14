@@ -92,8 +92,10 @@ def build_vcf(card: CardDict) -> str:
         lines.append(org_line)
 
     # ── Phones ───────────────────────────────────────────────────────────────
+    # TEL/EMAIL/URL/X-SOCIALPROFILE aren't TEXT-typed, so _single_line()
+    # strips line breaks/controls instead of backslash-escaping them.
     for phone in card.get("phones") or []:
-        number = phone.get("number") or ""
+        number = _single_line(phone.get("number") or "")
         phone_type = (phone.get("type") or "WORK").upper()
         type_param = _PHONE_TYPE_MAP.get(phone_type, "VOICE")
         if number:
@@ -101,7 +103,7 @@ def build_vcf(card: CardDict) -> str:
 
     # ── Emails ───────────────────────────────────────────────────────────────
     for email in card.get("emails") or []:
-        address = email.get("address") or ""
+        address = _single_line(email.get("address") or "")
         email_type = (email.get("type") or "WORK").upper()
         type_param = _EMAIL_TYPE_MAP.get(email_type, "INTERNET")
         if address:
@@ -109,6 +111,7 @@ def build_vcf(card: CardDict) -> str:
 
     # ── URLs ─────────────────────────────────────────────────────────────────
     for url in card.get("urls") or []:
+        url = _single_line(url or "")
         if url:
             lines.append(f"URL:{url}")
 
@@ -119,7 +122,7 @@ def build_vcf(card: CardDict) -> str:
 
     # ── Social profiles ───────────────────────────────────────────────────────
     for social_key in ("linkedin", "twitter", "instagram"):
-        value = card.get(social_key)
+        value = _single_line(card.get(social_key) or "")
         if value:
             lines.append(f"X-SOCIALPROFILE;TYPE={social_key}:{value}")
 
@@ -240,10 +243,21 @@ def _build_adr(card: CardDict) -> str:
 
 
 def _escape_text(value: str) -> str:
-    """Escape commas, semicolons, and backslashes per RFC 2426 §2.6."""
+    """Escape a vCard TEXT value per RFC 2426 §2.6 / §5.
+
+    Backslashes, commas, and semicolons are escaped. Line breaks of any
+    kind become the literal two-character sequence ``\\n``, and other
+    control characters are removed. Without this, an LLM-extracted value
+    containing a newline (e.g. via prompt injection in the card image)
+    would start a new vCard property line, letting card text inject
+    arbitrary fields such as an extra TEL or URL.
+    """
+    value = _normalize_controls(value)
     value = value.replace("\\", "\\\\")
     value = value.replace(",", "\\,")
     value = value.replace(";", "\\;")
+    # Escape newlines last so the backslash we add isn't itself escaped.
+    value = value.replace("\n", "\\n")
     return value
 
 
@@ -256,15 +270,36 @@ def _escape_note(value: str) -> str:
     """Escape a NOTE value per RFC 2426.
 
     Newlines in note text are represented as literal \\n in the vCard stream.
-    Commas, semicolons, and backslashes are also escaped.
+    Commas, semicolons, and backslashes are also escaped. Identical to
+    :func:`_escape_text`, kept as a named entry point for clarity.
     """
-    value = value.replace("\\", "\\\\")
-    value = value.replace(",", "\\,")
-    value = value.replace(";", "\\;")
-    # Represent newlines as vCard literal \n (not CRLF — that would break folding)
-    value = value.replace("\r\n", "\\n")
-    value = value.replace("\n", "\\n")
-    return value
+    return _escape_text(value)
+
+
+def _single_line(value: str) -> str:
+    """Make a non-TEXT value (TEL, EMAIL, URL, social URI) one safe line.
+
+    These properties aren't TEXT-typed, so the backslash escapes above don't
+    apply; any line break or control character is simply replaced with a
+    space (then trimmed) so the value can never start a new property line.
+    """
+    return " ".join(_normalize_controls(value).split("\n")).strip()
+
+
+# Every character a vCard parser might treat as a line break. Python's own
+# str.splitlines() honours all of these, and some contact apps do too.
+_LINE_BREAKS_RE = re.compile(r"\r\n|[\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+# Remaining C0 controls, DEL, and C1 controls (ESC lives here).
+_OTHER_CONTROLS_RE = re.compile(r"[\x00-\x08\x0e-\x1b\x1f\x7f\x80-\x84\x86-\x9f]")
+
+
+def _normalize_controls(value: str) -> str:
+    """Map every line-break variant to ``\\n`` and drop other controls.
+
+    Tabs (``\\t``) are kept; they are harmless inside a property value.
+    """
+    value = _LINE_BREAKS_RE.sub("\n", value)
+    return _OTHER_CONTROLS_RE.sub("", value)
 
 
 def _safe_filename(name: str) -> str:
