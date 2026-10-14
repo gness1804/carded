@@ -37,6 +37,30 @@ docker run --rm -p 8000:8000 \
 
 See `.cursor/docs/2-phase-5-deployment-runbook.md` for the Render + Cloudflare runbook.
 
+## Command-line export
+
+`scripts/card_to_vcf.py` runs the same local pipeline without the web server:
+photo in, `.vcf` out.
+
+```bash
+python3 scripts/card_to_vcf.py path/to/card.heic --out-dir ~/Downloads
+```
+
+- Reads the API key from `OWNER_ANTHROPIC_API_KEY` in `.env` (falls back to an
+  `ANTHROPIC_API_KEY` env var). The key is never printed.
+- Accepts JPEG, PNG, WebP, and HEIC. Never overwrites an existing file; adds
+  `-2`, `-3`, and so on instead.
+- `--json` prints a machine-readable result. `--verbose` shows BAML's full
+  prompt and response log, which contains card data, so it is off by default.
+- Exit codes: `0` ok, `1` config or file error, `2` bad command-line usage,
+  `3` not a card, `4` illegible, `5` unsupported image, `6` extraction failed.
+- Without `--verbose`, BAML logging is forced to `error` (even if your shell
+  sets `BAML_LOG`; `warn` still prints the full prompt when a call fails)
+  and error tracebacks are hidden, so card data and request
+  details stay out of the terminal. Files are created owner-only (`0600`).
+  The script never overwrites an existing file and won't follow a symlink
+  at the target filename (a symlinked `--out-dir` itself is followed).
+
 ## Git hooks
 
 Hooks live in a tracked `.githooks/` directory, but git does not pick them up
