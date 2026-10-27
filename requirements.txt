@@ -37,3 +37,9 @@ itsdangerous>=2.2.0
 # Environment variable loading
 # Floor raised in Phase 6: python-dotenv < 1.2.2 carries CVE-2026-28684.
 python-dotenv>=1.2.2
+
+# CA bundle (transitive via httpx/requests). Floor set explicitly because
+# certifi < 2026.10.19 still trusts the compromised eMudhra intermediates
+# (disclosed 2026-10-19). Changing this file also invalidates Docker's
+# cached pip layer, so the next build actually pulls the new bundle.
+certifi>=2026.10.19
