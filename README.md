@@ -88,4 +88,4 @@ fresh clone commits unprotected.
 
 ## License
 
-TBD
+MIT. See [LICENSE](LICENSE).
