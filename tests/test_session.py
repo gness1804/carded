@@ -69,9 +69,7 @@ class TestEncryptDecrypt:
         import time
 
         old_time = int(time.time()) - 1000
-        token = session._fernet.encrypt_at_time(
-            b"sk-ant-old", old_time
-        ).decode()
+        token = session._fernet.encrypt_at_time(b"sk-ant-old", old_time).decode()
         # 1000s old, ttl 500s -> expired -> None
         assert session.decrypt_api_key(token, ttl=500) is None
         # Same token within a larger ttl still decrypts.
@@ -95,9 +93,7 @@ class TestEncryptDecrypt:
         import time
 
         old_time = int(time.time()) - 400 * 24 * 60 * 60
-        token = session._fernet.encrypt_at_time(
-            b"sk-ant-old", old_time
-        ).decode()
+        token = session._fernet.encrypt_at_time(b"sk-ant-old", old_time).decode()
         assert session.decrypt_api_key(token, ttl=None) == "sk-ant-old"
 
 
