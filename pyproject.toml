@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "carded"
-version = "0.5.1"
+version = "0.5.2"
 # NOTE: keep app.py:__version__ in sync with the value above. /health surfaces
 # the runtime value from app.py so we can verify what's actually deployed.
 description = "Business card scanner that extracts structured contact data using BAML and LLMs"
@@ -24,7 +24,7 @@ dependencies = [
     "jinja2>=3.1.4",
     # Phase 6 security: floors raised to clear known CVEs. See requirements.txt.
     "python-multipart>=0.0.27",
-    "baml-py>=0.218.0",
+    "baml-py>=0.226.3",
     "cryptography>=41.0.0",
     "pillow>=12.2.0",
     "pillow-heif>=0.16.0",
@@ -41,10 +41,9 @@ dev = [
 ]
 
 [tool.ruff]
-exclude = ["baml_client/*", "baml_src/*"]
-
-[tool.black]
-exclude = '/(baml_client|baml_src)/'
+# .githooks/scan_identifiers.py is vendored byte-identical across repos, so
+# never reformat it here (see the LINTER SECTION comment in .githooks/pre-commit).
+exclude = ["baml_client/*", "baml_src/*", ".githooks/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

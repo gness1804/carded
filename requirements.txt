@@ -19,7 +19,7 @@ jinja2>=3.1.4
 python-multipart>=0.0.27
 
 # Structured LLM extraction
-baml-py==0.218.0
+baml-py==0.226.3
 
 # Image processing (HEIC/HEIF support for iPhone photos)
 # Floor raised in Phase 6: Pillow < 12.2.0 carries several image-parsing CVEs

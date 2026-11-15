@@ -48,7 +48,7 @@ from vcard_builder import build_vcf, vcf_filename
 from google_csv_builder import build_google_csv, csv_filename
 
 # Keep in sync with pyproject.toml [project] version. Surfaced via /health.
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ if not _DOWNLOAD_TOKEN_SECRET:
     # is sound for dev/test; production must set DOWNLOAD_TOKEN_SECRET so
     # tokens survive process restarts.
     import secrets as _secrets
+
     _DOWNLOAD_TOKEN_SECRET = _secrets.token_urlsafe(32)
     logger.warning(
         "DOWNLOAD_TOKEN_SECRET not set — using a random per-process secret. "
@@ -99,13 +100,9 @@ DEFAULT_KEY_PERSISTENCE = "7d"
 # generous for a single-user BYOK app; tune via env in production. This is
 # defense-in-depth abuse mitigation, not an authz control, and is not a
 # substitute for an edge/proxy limiter at scale.
-_RATE_LIMIT_WINDOW_SECONDS: int = int(
-    os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60")
-)
+_RATE_LIMIT_WINDOW_SECONDS: int = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60"))
 _RATE_LIMIT_PROCESS: int = int(os.environ.get("RATE_LIMIT_PROCESS", "15"))
-_RATE_LIMIT_SESSION_KEY: int = int(
-    os.environ.get("RATE_LIMIT_SESSION_KEY", "20")
-)
+_RATE_LIMIT_SESSION_KEY: int = int(os.environ.get("RATE_LIMIT_SESSION_KEY", "20"))
 
 # Number of trusted reverse proxies in front of the app. X-Forwarded-For is a
 # left-to-right list "<client>, <proxy1>, <proxy2>, ..." where each hop appends
@@ -150,8 +147,7 @@ class TokenStore:
             now = time.time()
             # Sweep expired entries before looking up the requested key.
             expired_keys = [
-                k for k, (ts, _) in self._store.items()
-                if now - ts >= self._ttl
+                k for k, (ts, _) in self._store.items() if now - ts >= self._ttl
             ]
             for k in expired_keys:
                 self._store.pop(k, None)
@@ -211,9 +207,7 @@ class RateLimiter:
             return True
 
 
-_session_key_limiter = RateLimiter(
-    _RATE_LIMIT_SESSION_KEY, _RATE_LIMIT_WINDOW_SECONDS
-)
+_session_key_limiter = RateLimiter(_RATE_LIMIT_SESSION_KEY, _RATE_LIMIT_WINDOW_SECONDS)
 _process_limiter = RateLimiter(_RATE_LIMIT_PROCESS, _RATE_LIMIT_WINDOW_SECONDS)
 
 # ---------------------------------------------------------------------------
@@ -251,6 +245,7 @@ async def _security_headers_middleware(request: Request, call_next):
         response.headers.setdefault(header, value)
     return response
 
+
 # ---------------------------------------------------------------------------
 # Pydantic request model
 # ---------------------------------------------------------------------------
@@ -259,6 +254,7 @@ async def _security_headers_middleware(request: Request, call_next):
 class KeySubmission(BaseModel):
     api_key: str
     persistence: Literal["session", "7d", "90d"] = DEFAULT_KEY_PERSISTENCE
+
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -288,8 +284,7 @@ def _sanitize_detail(s: str, max_len: int = 200) -> str:
     cleaned = "".join(
         c
         for c in s
-        if (c == "\n" or c == "\t")
-        or unicodedata.category(c) not in ("Cc", "Cf")
+        if (c == "\n" or c == "\t") or unicodedata.category(c) not in ("Cc", "Cf")
     )
     return cleaned[:max_len]
 
@@ -369,6 +364,7 @@ def _set_session_cookie(
         max_age=max_age,
         path="/",
     )
+
 
 # ---------------------------------------------------------------------------
 # Routes

@@ -51,9 +51,17 @@ _HEIC_MIME_TYPES: frozenset[str] = frozenset({"image/heic", "image/heif"})
 # ISO-BMFF 'ftyp' brands that indicate a HEIC/HEIF still image.
 _HEIF_FTYP_BRANDS: frozenset[bytes] = frozenset(
     {
-        b"heic", b"heix", b"heim", b"heis",
-        b"hevc", b"hevx", b"hevm", b"hevs",
-        b"mif1", b"msf1", b"heif",
+        b"heic",
+        b"heix",
+        b"heim",
+        b"heis",
+        b"hevc",
+        b"hevx",
+        b"hevm",
+        b"hevs",
+        b"mif1",
+        b"msf1",
+        b"heif",
     }
 )
 
@@ -82,14 +90,13 @@ def _sniff_image_mime(data: bytes) -> str | None:
         return "image/heif"
     return None
 
+
 # Decompression-bomb guard for the HEIC -> JPEG re-encode. HEIC is highly
 # compressed, so a small file can decode to an enormous raster and exhaust
 # memory. ~50 MP comfortably covers any real phone camera (a 48 MP sensor is
 # ~48 MP) while bounding the worst case. Only HEIC/HEIF inputs are decoded
 # server-side; other formats are forwarded to BAML without a local decode.
-_MAX_IMAGE_PIXELS: int = int(
-    os.environ.get("MAX_IMAGE_PIXELS", str(50_000_000))
-)
+_MAX_IMAGE_PIXELS: int = int(os.environ.get("MAX_IMAGE_PIXELS", str(50_000_000)))
 
 # JPEG quality for the HEIC -> JPEG re-encode. Business cards are dense small
 # text and digit runs; Pillow's default (75, with 4:2:0 chroma subsampling)
@@ -296,9 +303,7 @@ def _call_baml(img: baml_py.Image, api_key: str) -> BusinessCard:
     via future.result(timeout=...). On timeout, raises ExtractionTimeout.
     On any other BAML/runtime error, wraps in ExtractionError.
     """
-    timeout_seconds = float(
-        os.environ.get("EXTRACTION_TIMEOUT_SECONDS", "60")
-    )
+    timeout_seconds = float(os.environ.get("EXTRACTION_TIMEOUT_SECONDS", "60"))
 
     def _baml_call() -> BusinessCard:
         client = b.with_options(env={"ANTHROPIC_API_KEY": api_key})

@@ -197,9 +197,7 @@ def test_phone_type_routing(phone_type: str, expected_label: str):
 def test_phones_beyond_4_are_dropped_with_warning(caplog):
     card = {
         **ALL_NULL,
-        "phones": [
-            {"number": f"555-000{i}", "type": "WORK"} for i in range(5)
-        ],
+        "phones": [{"number": f"555-000{i}", "type": "WORK"} for i in range(5)],
     }
     import logging
 
@@ -275,7 +273,12 @@ def test_address_null_means_all_address_columns_empty():
 
 def test_non_ascii_in_csv():
     name = "Renée Müller-中野"
-    card = {**ALL_NULL, "full_name": name, "first_name": "Renée", "last_name": "Müller-中野"}
+    card = {
+        **ALL_NULL,
+        "full_name": name,
+        "first_name": "Renée",
+        "last_name": "Müller-中野",
+    }
     row = _parse(build_google_csv(card))
     assert row["Name"] == name
     assert row["Given Name"] == "Renée"
@@ -359,7 +362,10 @@ def test_minimal_card_empty_arrays():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("payload", ["=HYPERLINK(\"http://evil\")", "@SUM(1)", "-2+3", "+2+3", "\tcmd", "\rcmd"])
+@pytest.mark.parametrize(
+    "payload",
+    ['=HYPERLINK("http://evil")', "@SUM(1)", "-2+3", "+2+3", "\tcmd", "\rcmd"],
+)
 def test_formula_injection_neutralized_in_note(payload: str):
     """Note values that a spreadsheet would evaluate as a formula are
     prefixed with a single quote in the exported CSV."""

@@ -61,8 +61,7 @@ def _clean_env(monkeypatch):
 
 def _run(image, out_dir, env_file, *extra):
     return card_to_vcf.run(
-        [str(image), "--out-dir", str(out_dir),
-         "--env-file", str(env_file), *extra]
+        [str(image), "--out-dir", str(out_dir), "--env-file", str(env_file), *extra]
     )
 
 
@@ -106,15 +105,11 @@ def test_valid_card_writes_vcf_with_crlf(tmp_path, image, env_file, capsys):
     assert "Organization: Helio Studio" in out
 
 
-def test_api_key_is_passed_to_baml_but_never_printed(
-    tmp_path, image, env_file, capsys
-):
+def test_api_key_is_passed_to_baml_but_never_printed(tmp_path, image, env_file, capsys):
     mock_b = _mock_b(_make_valid_card())
     with patch("main.b", mock_b):
         _run(image, tmp_path, env_file, "--json")
-    mock_b.with_options.assert_called_once_with(
-        env={"ANTHROPIC_API_KEY": FAKE_KEY}
-    )
+    mock_b.with_options.assert_called_once_with(env={"ANTHROPIC_API_KEY": FAKE_KEY})
     captured = capsys.readouterr()
     assert FAKE_KEY not in captured.out + captured.err
 
@@ -158,8 +153,8 @@ def test_non_image_file_is_unsupported(tmp_path, env_file):
 
 def test_baml_error_maps_to_extraction_failed(tmp_path, image, env_file):
     mock_b = MagicMock()
-    mock_b.with_options.return_value.ExtractBusinessCard.side_effect = (
-        RuntimeError("boom")
+    mock_b.with_options.return_value.ExtractBusinessCard.side_effect = RuntimeError(
+        "boom"
     )
     with patch("main.b", mock_b):
         code = _run(image, tmp_path, env_file)
@@ -178,8 +173,7 @@ def test_oversized_image_is_rejected(tmp_path, image, env_file):
     assert _run(image, tmp_path, env_file) == card_to_vcf.EXIT_CONFIG
 
 
-@pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "0", "-5", "abc",
-                                 "1e400"])
+@pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "0", "-5", "abc", "1e400"])
 def test_bad_max_file_size_falls_back_to_default(tmp_path, raw):
     env = tmp_path / ".env"
     env.write_text(f"MAX_FILE_SIZE_MB={raw}\n")
@@ -208,10 +202,15 @@ def test_usage_error_exit_code_is_distinct(capsys):
     with pytest.raises(SystemExit) as excinfo:
         card_to_vcf.run(["--no-such-flag"])
     assert excinfo.value.code == card_to_vcf.EXIT_USAGE
-    codes = [card_to_vcf.EXIT_OK, card_to_vcf.EXIT_CONFIG,
-             card_to_vcf.EXIT_USAGE, card_to_vcf.EXIT_NOT_A_CARD,
-             card_to_vcf.EXIT_ILLEGIBLE, card_to_vcf.EXIT_UNSUPPORTED,
-             card_to_vcf.EXIT_EXTRACTION_FAILED]
+    codes = [
+        card_to_vcf.EXIT_OK,
+        card_to_vcf.EXIT_CONFIG,
+        card_to_vcf.EXIT_USAGE,
+        card_to_vcf.EXIT_NOT_A_CARD,
+        card_to_vcf.EXIT_ILLEGIBLE,
+        card_to_vcf.EXIT_UNSUPPORTED,
+        card_to_vcf.EXIT_EXTRACTION_FAILED,
+    ]
     assert len(set(codes)) == len(codes)
 
 
@@ -226,11 +225,10 @@ def test_timeout_maps_to_extraction_failed(tmp_path, image, env_file):
 # ── Secret hygiene (QA finding: traceback could leak the key) ───────────────
 
 
-def test_baml_error_traceback_is_suppressed(tmp_path, image, env_file,
-                                            capsys, caplog):
+def test_baml_error_traceback_is_suppressed(tmp_path, image, env_file, capsys, caplog):
     mock_b = MagicMock()
-    mock_b.with_options.return_value.ExtractBusinessCard.side_effect = (
-        RuntimeError(f"upstream said: bad key {FAKE_KEY}")
+    mock_b.with_options.return_value.ExtractBusinessCard.side_effect = RuntimeError(
+        f"upstream said: bad key {FAKE_KEY}"
     )
     with caplog.at_level("DEBUG"), patch("main.b", mock_b):
         code = _run(image, tmp_path, env_file)
@@ -241,13 +239,14 @@ def test_baml_error_traceback_is_suppressed(tmp_path, image, env_file,
     assert FAKE_KEY not in caplog.text
     # The logger is re-enabled afterwards so the web app is unaffected.
     import logging
+
     assert logging.getLogger("main").disabled is False
 
 
 def test_verbose_keeps_traceback_logging(tmp_path, image, env_file, caplog):
     mock_b = MagicMock()
-    mock_b.with_options.return_value.ExtractBusinessCard.side_effect = (
-        RuntimeError("boom")
+    mock_b.with_options.return_value.ExtractBusinessCard.side_effect = RuntimeError(
+        "boom"
     )
     with caplog.at_level("DEBUG"), patch("main.b", mock_b):
         _run(image, tmp_path, env_file, "--verbose")
@@ -274,8 +273,7 @@ def test_write_new_file_is_owner_only(tmp_path):
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
-def test_unwritable_out_dir_is_config_error(tmp_path, image, env_file,
-                                            capsys):
+def test_unwritable_out_dir_is_config_error(tmp_path, image, env_file, capsys):
     out = tmp_path / "ro"
     out.mkdir()
     out.chmod(0o500)
@@ -301,8 +299,7 @@ def test_huge_max_file_size_is_capped_not_crashing(tmp_path, raw):
 
 def test_unwrapped_error_is_clean_exit_6(tmp_path, image, env_file, capsys):
     secret_msg = f"pillow choked; request had {FAKE_KEY}"
-    with patch("main.extract_card_from_bytes",
-               side_effect=OSError(secret_msg)):
+    with patch("main.extract_card_from_bytes", side_effect=OSError(secret_msg)):
         code = _run(image, tmp_path, env_file)
     assert code == card_to_vcf.EXIT_EXTRACTION_FAILED
     captured = capsys.readouterr()
@@ -311,20 +308,21 @@ def test_unwrapped_error_is_clean_exit_6(tmp_path, image, env_file, capsys):
     assert FAKE_KEY not in out
     assert "Traceback" not in out
     import logging
+
     assert logging.getLogger("main").disabled is False
 
 
 def test_unwrapped_error_reraises_under_verbose(tmp_path, image, env_file):
-    with patch("main.extract_card_from_bytes",
-               side_effect=ValueError("bad timeout")):
+    with patch("main.extract_card_from_bytes", side_effect=ValueError("bad timeout")):
         with pytest.raises(ValueError):
             _run(image, tmp_path, env_file, "--verbose")
 
 
 def test_build_vcf_error_is_clean_exit_6(tmp_path, image, env_file, capsys):
-    with patch("main.b", _mock_b(_make_valid_card())), \
-            patch("vcard_builder.build_vcf",
-                  side_effect=KeyError(FAKE_KEY)):
+    with (
+        patch("main.b", _mock_b(_make_valid_card())),
+        patch("vcard_builder.build_vcf", side_effect=KeyError(FAKE_KEY)),
+    ):
         code = _run(image, tmp_path, env_file)
     assert code == card_to_vcf.EXIT_EXTRACTION_FAILED
     captured = capsys.readouterr()
@@ -351,16 +349,18 @@ def test_partial_file_removed_when_write_fails(tmp_path, monkeypatch):
     assert not (tmp_path / "a.vcf").exists()
 
 
-def test_partial_write_does_not_remove_preexisting_file(tmp_path,
-                                                        monkeypatch):
+def test_partial_write_does_not_remove_preexisting_file(tmp_path, monkeypatch):
     (tmp_path / "a.vcf").write_text("keep me")
     real_fdopen = os.fdopen
 
     def failing_fdopen(fd, *a, **kw):
         fh = real_fdopen(fd, *a, **kw)
-        monkeypatch.setattr(fh, "write",
-                            lambda _c: (_ for _ in ()).throw(OSError(28, "x")),
-                            raising=False)
+        monkeypatch.setattr(
+            fh,
+            "write",
+            lambda _c: (_ for _ in ()).throw(OSError(28, "x")),
+            raising=False,
+        )
         return fh
 
     monkeypatch.setattr(card_to_vcf.os, "fdopen", failing_fdopen)
@@ -378,21 +378,29 @@ def test_read_capped_rejects_file_over_limit(tmp_path):
     assert card_to_vcf.read_capped(f, 101) == b"x" * 101
 
 
-def test_file_growing_after_stat_is_rejected(tmp_path, image, env_file,
-                                             monkeypatch):
+def test_file_growing_after_stat_is_rejected(tmp_path, image, env_file, monkeypatch):
     """stat() reports a small size, but the real read exceeds the limit."""
-    env_file.write_text(
-        f"OWNER_ANTHROPIC_API_KEY={FAKE_KEY}\nMAX_FILE_SIZE_MB=0.001\n"
-    )
+    env_file.write_text(f"OWNER_ANTHROPIC_API_KEY={FAKE_KEY}\nMAX_FILE_SIZE_MB=0.001\n")
     image.write_bytes(b"x" * 5000)  # > 0.001 MB (1048 bytes)
     real_stat = Path.stat
 
     def small_stat(self, *a, **kw):
         st = real_stat(self, *a, **kw)
         if self == image:
-            return os.stat_result((st.st_mode, st.st_ino, st.st_dev,
-                                   st.st_nlink, st.st_uid, st.st_gid, 10,
-                                   st.st_atime, st.st_mtime, st.st_ctime))
+            return os.stat_result(
+                (
+                    st.st_mode,
+                    st.st_ino,
+                    st.st_dev,
+                    st.st_nlink,
+                    st.st_uid,
+                    st.st_gid,
+                    10,
+                    st.st_atime,
+                    st.st_mtime,
+                    st.st_ctime,
+                )
+            )
         return st
 
     monkeypatch.setattr(Path, "stat", small_stat)
@@ -414,47 +422,57 @@ def test_terminal_safe_neutralizes_escape_sequences():
 
 
 def test_terminal_safe_keeps_our_newlines_and_unicode():
-    assert card_to_vcf.terminal_safe("José\n  Café — ok") == \
-        "José\n  Café — ok"
+    assert card_to_vcf.terminal_safe("José\n  Café — ok") == "José\n  Café — ok"
 
 
-@pytest.mark.parametrize("name", [
-    "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",  # Persian, ZWNJ
-    "\u0915\u094d\u200d\u0937",                         # Devanagari, ZWJ
-    "\U0001f469\u200d\U0001f4bb",                       # emoji ZWJ sequence
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",  # Persian, ZWNJ
+        "\u0915\u094d\u200d\u0937",  # Devanagari, ZWJ
+        "\U0001f469\u200d\U0001f4bb",  # emoji ZWJ sequence
+    ],
+)
 def test_terminal_safe_keeps_legit_joiners(name):
     assert card_to_vcf.terminal_safe(name) == name
 
 
-@pytest.mark.parametrize("bad", ["\u202e", "\u202a", "\u2066", "\u2069",
-                                 "\x1b", "\x07", "\x9b", "\u200b"])
+@pytest.mark.parametrize(
+    "bad", ["\u202e", "\u202a", "\u2066", "\u2069", "\x1b", "\x07", "\x9b", "\u200b"]
+)
 def test_terminal_safe_still_blocks_dangerous_format_chars(bad):
     assert bad not in card_to_vcf.terminal_safe(f"a{bad}b")
 
 
 @pytest.mark.parametrize("brk", ["\n", "\r\n", "\r", "\u2028", "\x85"])
 def test_summary_field_cannot_fake_extra_lines(brk):
-    card = {"full_name": f"Bob{brk}  Email (work): attacker@evil.example",
-            "title": None, "organization": None, "department": None,
-            "phones": [], "emails": [], "urls": [], "address": None,
-            "linkedin": None, "twitter": None, "instagram": None,
-            "note": "line1\nline2"}
+    card = {
+        "full_name": f"Bob{brk}  Email (work): attacker@evil.example",
+        "title": None,
+        "organization": None,
+        "department": None,
+        "phones": [],
+        "emails": [],
+        "urls": [],
+        "address": None,
+        "linkedin": None,
+        "twitter": None,
+        "instagram": None,
+        "note": "line1\nline2",
+    }
     lines = card_to_vcf.summarize(card)
     assert len(lines) == 2  # Name + Note, one line each
-    assert lines[0] == ("Name: Bob \u23ce   Email (work): "
-                        "attacker@evil.example")
+    assert lines[0] == ("Name: Bob \u23ce   Email (work): attacker@evil.example")
     assert lines[1] == "Note: line1 \u23ce line2"
     printed = card_to_vcf.terminal_safe("\n".join(lines))
     assert len(printed.split("\n")) == 2
-    assert not any(ln.lstrip().startswith("Email") for ln in
-                   printed.split("\n"))
+    assert not any(ln.lstrip().startswith("Email") for ln in printed.split("\n"))
 
 
-def test_printed_fields_contain_no_escape_codes(tmp_path, image, env_file,
-                                                capsys):
-    card = _make_valid_card(full_name="Jamie\x1b]8;;http://evil\x07Park",
-                            title="Founder\x1b[2J")
+def test_printed_fields_contain_no_escape_codes(tmp_path, image, env_file, capsys):
+    card = _make_valid_card(
+        full_name="Jamie\x1b]8;;http://evil\x07Park", title="Founder\x1b[2J"
+    )
     with patch("main.b", _mock_b(card)):
         assert _run(image, tmp_path, env_file) == card_to_vcf.EXIT_OK
     captured = capsys.readouterr()
@@ -469,8 +487,7 @@ def test_not_a_card_message_is_sanitized(tmp_path, image, env_file, capsys):
     assert "\x1b" not in capsys.readouterr().err
 
 
-def test_not_a_card_message_cannot_fake_extra_lines(tmp_path, image,
-                                                    env_file, capsys):
+def test_not_a_card_message_cannot_fake_extra_lines(tmp_path, image, env_file, capsys):
     result = _make_not_a_card("a dog\nSaved: /tmp/fake.vcf")
     with patch("main.b", _mock_b(result)):
         _run(image, tmp_path, env_file)
@@ -540,13 +557,20 @@ def test_baml_log_is_set_before_baml_client_loads(tmp_path, env_file):
     bogus = tmp_path / "notes.jpg"
     bogus.write_bytes(b"plain text, not an image")
     probe = tmp_path / "probe.py"
-    probe.write_text(_ORDER_PROBE.format(
-        scripts=str(REPO_ROOT / "scripts"), image=str(bogus),
-        out=str(tmp_path), env=str(env_file),
-    ))
+    probe.write_text(
+        _ORDER_PROBE.format(
+            scripts=str(REPO_ROOT / "scripts"),
+            image=str(bogus),
+            out=str(tmp_path),
+            env=str(env_file),
+        )
+    )
     proc = subprocess.run(
-        [sys.executable, str(probe)], cwd=REPO_ROOT, capture_output=True,
-        text=True, timeout=60,
+        [sys.executable, str(probe)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
         env={k: v for k, v in os.environ.items() if k != "BAML_LOG"},
     )
     assert proc.returncode == 0, proc.stderr
@@ -567,11 +591,24 @@ def test_live_bad_key_leaks_nothing_to_stderr(tmp_path, image):
     env = tmp_path / ".env"
     env.write_text(f"OWNER_ANTHROPIC_API_KEY={FAKE_KEY}\n")
     proc = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "scripts" / "card_to_vcf.py"),
-         str(image), "--out-dir", str(tmp_path), "--env-file", str(env)],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=120,
-        env={k: v for k, v in os.environ.items()
-             if k not in ("BAML_LOG",) + card_to_vcf.KEY_NAMES},
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "card_to_vcf.py"),
+            str(image),
+            "--out-dir",
+            str(tmp_path),
+            "--env-file",
+            str(env),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("BAML_LOG",) + card_to_vcf.KEY_NAMES
+        },
     )
     output = proc.stdout + proc.stderr
     assert proc.returncode == card_to_vcf.EXIT_EXTRACTION_FAILED

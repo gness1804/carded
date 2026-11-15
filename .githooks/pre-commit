@@ -102,6 +102,10 @@ if [ -n "$py_files" ]; then
       echo "pre-commit: ruff check failed. Fix the issues (or --no-verify to bypass)." >&2
       exit 1
     }
+    printf '%s\n' "$py_files" | tr '\n' '\0' | xargs -0 ruff format --check || {
+      echo "pre-commit: ruff format --check failed. Run 'ruff format' on the files (or --no-verify)." >&2
+      exit 1
+    }
   fi
 fi
 # >>> END LINTER SECTION <<<

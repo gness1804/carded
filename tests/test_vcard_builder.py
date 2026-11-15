@@ -62,7 +62,9 @@ def test_full_card_produces_valid_vcf():
     assert "URL:https://jamiepark.design\r\n" in vcf
 
     # ADR: PO Box (empty); Extended (street2); Street; City; State; Postal; Country
-    assert "ADR;TYPE=WORK:;Suite 800;340 Pine Street;San Francisco;CA;94104;USA\r\n" in vcf
+    assert (
+        "ADR;TYPE=WORK:;Suite 800;340 Pine Street;San Francisco;CA;94104;USA\r\n" in vcf
+    )
 
     # Three social profile lines
     assert "X-SOCIALPROFILE;TYPE=linkedin:linkedin.com/in/jamiepark\r\n" in vcf
@@ -193,7 +195,12 @@ def test_address_partial_subfields():
 
 def test_non_ascii_name_encoding():
     name = "Renée Müller-中野"
-    card = {**ALL_NULL, "full_name": name, "first_name": "Renée", "last_name": "Müller-中野"}
+    card = {
+        **ALL_NULL,
+        "full_name": name,
+        "first_name": "Renée",
+        "last_name": "Müller-中野",
+    }
     vcf = build_vcf(card)
     # The function returns str; the name should survive the round-trip intact.
     assert name in vcf
@@ -225,7 +232,7 @@ def test_note_newlines_become_literal_backslash_n():
     assert "NOTE:line1\\nline2\r\n" in vcf
     # No raw newline inside the NOTE value
     note_line = next(ln for ln in _lines(vcf) if ln.startswith("NOTE:"))
-    value = note_line[len("NOTE:"):]
+    value = note_line[len("NOTE:") :]
     assert "\n" not in value
 
 

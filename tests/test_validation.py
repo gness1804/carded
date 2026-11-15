@@ -4,7 +4,6 @@ Both modules were previously untested. These cover the public API of each
 class, including edge cases relevant to the prompt-injection defense layer.
 """
 
-
 from validation.detector import PromptInjectionDetector
 from validation.sanitizer import InputSanitizer
 
@@ -50,9 +49,7 @@ class TestInputSanitizerDangerousPhrases:
         san = InputSanitizer()
         for phrase in InputSanitizer.DANGEROUS_PHRASES:
             result = san.sanitize(phrase)
-            assert "[REDACTED]" in result, (
-                f"Expected phrase to be redacted: {phrase!r}"
-            )
+            assert "[REDACTED]" in result, f"Expected phrase to be redacted: {phrase!r}"
 
 
 class TestInputSanitizerEncoding:
@@ -61,6 +58,7 @@ class TestInputSanitizerEncoding:
 
     def test_long_base64_is_wrapped(self):
         import base64
+
         payload = base64.b64encode(b"A" * 40).decode()  # 56-char b64 string
         result = self.san.sanitize(payload)
         assert "[ENCODED_CONTENT:" in result
@@ -171,6 +169,7 @@ class TestPromptInjectionDetectorEncodingAttacks:
 
     def test_detects_base64_encoded_injection(self):
         import base64
+
         # 32-byte plaintext -> 44-char base64 (43 alnum + one '='), which
         # satisfies the detector's [A-Za-z0-9+/]{40,} chunk regex. Use the
         # encoder output verbatim — re-padding/truncating it corrupts the

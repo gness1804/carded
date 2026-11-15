@@ -91,9 +91,7 @@ def max_file_size_bytes(env_file: Path) -> int:
     from dotenv import dotenv_values
 
     file_values = dotenv_values(env_file) if env_file.is_file() else {}
-    raw = file_values.get("MAX_FILE_SIZE_MB") or os.environ.get(
-        "MAX_FILE_SIZE_MB"
-    )
+    raw = file_values.get("MAX_FILE_SIZE_MB") or os.environ.get("MAX_FILE_SIZE_MB")
     try:
         mb = float(raw) if raw else DEFAULT_MAX_FILE_SIZE_MB
     except (ValueError, OverflowError):
@@ -118,9 +116,7 @@ def write_new_file(directory: Path, filename: str, content: str) -> Path:
     stem, suffix = os.path.splitext(filename)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     for attempt in range(1, MAX_NAME_ATTEMPTS + 1):
-        path = directory / (
-            filename if attempt == 1 else f"{stem}-{attempt}{suffix}"
-        )
+        path = directory / (filename if attempt == 1 else f"{stem}-{attempt}{suffix}")
         try:
             fd = os.open(path, flags, 0o600)
         except FileExistsError:
@@ -176,8 +172,7 @@ def terminal_safe(text: str) -> str:
     """
     return "\n".join(
         "".join(
-            ch if ch.isprintable() or ch in _TERMINAL_ALLOWED_FORMAT_CHARS
-            else "\ufffd"
+            ch if ch.isprintable() or ch in _TERMINAL_ALLOWED_FORMAT_CHARS else "\ufffd"
             for ch in line
         )
         for line in text.split("\n")
@@ -210,19 +205,16 @@ def summarize(card: dict[str, Any]) -> list[str]:
     add("Organization", card.get("organization"))
     add("Department", card.get("department"))
     for phone in card.get("phones") or []:
-        add(f"Phone ({(phone.get('type') or 'work').lower()})",
-            phone.get("number"))
+        add(f"Phone ({(phone.get('type') or 'work').lower()})", phone.get("number"))
     for email in card.get("emails") or []:
-        add(f"Email ({(email.get('type') or 'work').lower()})",
-            email.get("address"))
+        add(f"Email ({(email.get('type') or 'work').lower()})", email.get("address"))
     for url in card.get("urls") or []:
         add("URL", url)
     address = card.get("address") or {}
     if address:
         parts = [
             address.get(k)
-            for k in ("street", "street2", "city", "state",
-                      "postal_code", "country")
+            for k in ("street", "street2", "city", "state", "postal_code", "country")
         ]
         add("Address", ", ".join(p for p in parts if p))
     for social in ("linkedin", "twitter", "instagram"):
@@ -254,20 +246,26 @@ def run(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("image", type=Path, help="Path to the card image")
     parser.add_argument(
-        "--out-dir", type=Path, default=Path.cwd(),
+        "--out-dir",
+        type=Path,
+        default=Path.cwd(),
         help="Directory to write the .vcf into (default: current directory)",
     )
     parser.add_argument(
-        "--json", action="store_true",
+        "--json",
+        action="store_true",
         help="Print a JSON result (path + fields) instead of plain text",
     )
     parser.add_argument(
-        "--verbose", action="store_true",
+        "--verbose",
+        action="store_true",
         help="Show BAML's prompt/response log and full error tracebacks "
-             "(may contain card data)",
+        "(may contain card data)",
     )
     parser.add_argument(
-        "--env-file", type=Path, default=REPO_ROOT / ".env",
+        "--env-file",
+        type=Path,
+        default=REPO_ROOT / ".env",
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args(argv)
@@ -291,9 +289,7 @@ def run(argv: list[str] | None = None) -> int:
             raise ConfigError(f"Output directory not found: {out_dir}")
         limit = max_file_size_bytes(args.env_file)
         if image_path.stat().st_size > limit:
-            raise ConfigError(
-                f"Image is larger than {limit / (1024 * 1024):g} MB."
-            )
+            raise ConfigError(f"Image is larger than {limit / (1024 * 1024):g} MB.")
         api_key = load_api_key(args.env_file)
         # Capped read: a file that grew after the stat() above is still
         # rejected, and never more than limit + 1 bytes is loaded.
@@ -302,15 +298,23 @@ def run(argv: list[str] | None = None) -> int:
         emit("config_error", str(exc))
         return EXIT_CONFIG
     except OSError as exc:
-        emit("config_error", f"Could not read input: {type(exc).__name__}: "
-             f"{exc.strerror or exc}")
+        emit(
+            "config_error",
+            f"Could not read input: {type(exc).__name__}: {exc.strerror or exc}",
+        )
         return EXIT_CONFIG
 
     # Imported late so --help and config errors skip BAML start-up cost, and
     # so BAML_LOG (set above) is in place before baml_client first loads.
     from main import (
-        ExtractionError, ExtractionTimeout, Illegible, NotABusinessCard,
-        UnsupportedMimeType, Valid, _sniff_image_mime, extract_card_from_bytes,
+        ExtractionError,
+        ExtractionTimeout,
+        Illegible,
+        NotABusinessCard,
+        UnsupportedMimeType,
+        Valid,
+        _sniff_image_mime,
+        extract_card_from_bytes,
     )
     from vcard_builder import build_vcf, vcf_filename
 
@@ -330,8 +334,10 @@ def run(argv: list[str] | None = None) -> int:
             image_data, mime, api_key, filename=image_path.name
         )
     except UnsupportedMimeType:
-        emit("unsupported", "Unsupported or unreadable image. "
-             "Use JPEG, PNG, WebP, or HEIC.")
+        emit(
+            "unsupported",
+            "Unsupported or unreadable image. Use JPEG, PNG, WebP, or HEIC.",
+        )
         return EXIT_UNSUPPORTED
     except ExtractionTimeout:
         emit("extraction_failed", "Extraction timed out. Try again.")
@@ -346,25 +352,27 @@ def run(argv: list[str] | None = None) -> int:
         # type name only -- the message could carry request details.
         if args.verbose:
             raise
-        emit("extraction_failed",
-             f"Extraction failed: {type(exc).__name__} "
-             "(re-run with --verbose for details)")
+        emit(
+            "extraction_failed",
+            f"Extraction failed: {type(exc).__name__} "
+            "(re-run with --verbose for details)",
+        )
         return EXIT_EXTRACTION_FAILED
     finally:
         main_logger.disabled = previously_disabled
 
     # result.message is LLM output: flatten it so it can't fake extra lines.
     if isinstance(result, NotABusinessCard):
-        emit("not_a_card",
-             f"Not a business card: {_one_display_line(result.message)}")
+        emit("not_a_card", f"Not a business card: {_one_display_line(result.message)}")
         return EXIT_NOT_A_CARD
     if isinstance(result, Illegible):
-        emit("illegible",
-             f"Card is illegible: {_one_display_line(result.message)}")
+        emit("illegible", f"Card is illegible: {_one_display_line(result.message)}")
         return EXIT_ILLEGIBLE
     if not isinstance(result, Valid):
-        emit("extraction_failed",
-             f"Unexpected extraction result: {type(result).__name__}")
+        emit(
+            "extraction_failed",
+            f"Unexpected extraction result: {type(result).__name__}",
+        )
         return EXIT_EXTRACTION_FAILED
 
     card = result.card.model_dump()
@@ -374,15 +382,19 @@ def run(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 -- deliberate catch-all
         if args.verbose:
             raise
-        emit("extraction_failed",
-             f"Could not build vCard: {type(exc).__name__} "
-             "(re-run with --verbose for details)")
+        emit(
+            "extraction_failed",
+            f"Could not build vCard: {type(exc).__name__} "
+            "(re-run with --verbose for details)",
+        )
         return EXIT_EXTRACTION_FAILED
     try:
         vcf_path = write_new_file(out_dir, filename, vcf_text)
     except OSError as exc:
-        emit("config_error", f"Could not write vCard: {type(exc).__name__}: "
-             f"{exc.strerror or exc}")
+        emit(
+            "config_error",
+            f"Could not write vCard: {type(exc).__name__}: {exc.strerror or exc}",
+        )
         return EXIT_CONFIG
 
     fields = summarize(card)

@@ -58,6 +58,7 @@ _TINY_JPEG = bytes([0xFF, 0xD8, 0xFF, 0xD9])
 def _session_cookie(api_key: str = _VALID_KEY) -> dict:
     """Return a cookies dict with a valid carded_session for the given key."""
     import session as session_module_helper
+
     token = session_module_helper.encrypt_api_key(api_key)
     return {"carded_session": token}
 
@@ -206,15 +207,11 @@ class TestKeyPersistence:
         assert f"max-age={7 * 24 * 60 * 60}" in header
 
     def test_explicit_7_days(self):
-        header = self._set_cookie_header(
-            {"api_key": _VALID_KEY, "persistence": "7d"}
-        )
+        header = self._set_cookie_header({"api_key": _VALID_KEY, "persistence": "7d"})
         assert f"max-age={7 * 24 * 60 * 60}" in header
 
     def test_90_days(self):
-        header = self._set_cookie_header(
-            {"api_key": _VALID_KEY, "persistence": "90d"}
-        )
+        header = self._set_cookie_header({"api_key": _VALID_KEY, "persistence": "90d"})
         assert f"max-age={90 * 24 * 60 * 60}" in header
 
     def test_session_only_has_no_max_age_or_expires(self):
@@ -343,7 +340,9 @@ class TestProcessFileSize:
 class TestProcessExtractionErrors:
     def test_400_invalid_file_type(self):
         with patch.object(
-            app_module, "extract_card_from_bytes", side_effect=UnsupportedMimeType("bad mime")
+            app_module,
+            "extract_card_from_bytes",
+            side_effect=UnsupportedMimeType("bad mime"),
         ):
             response = client.post(
                 "/process",
@@ -355,7 +354,9 @@ class TestProcessExtractionErrors:
 
     def test_502_extraction_timeout(self):
         with patch.object(
-            app_module, "extract_card_from_bytes", side_effect=ExtractionTimeout("timed out")
+            app_module,
+            "extract_card_from_bytes",
+            side_effect=ExtractionTimeout("timed out"),
         ):
             response = client.post(
                 "/process",
@@ -370,7 +371,9 @@ class TestProcessExtractionErrors:
 
     def test_502_extraction_error(self):
         with patch.object(
-            app_module, "extract_card_from_bytes", side_effect=ExtractionError("internal crash")
+            app_module,
+            "extract_card_from_bytes",
+            side_effect=ExtractionError("internal crash"),
         ):
             response = client.post(
                 "/process",
@@ -553,6 +556,7 @@ class TestDownloadVcf:
     def test_410_expired_token(self):
         """A token that itsdangerous reports as SignatureExpired returns 410."""
         from itsdangerous import SignatureExpired
+
         with patch.object(
             app_module._SERIALIZER,
             "loads",
@@ -639,9 +643,13 @@ class TestSanitizeDetail:
             char = chr(code)
             if char in ("\n", "\t"):
                 # These are preserved.
-                assert char in _sanitize_detail(char), f"Expected \\x{code:02x} to be preserved"
+                assert char in _sanitize_detail(char), (
+                    f"Expected \\x{code:02x} to be preserved"
+                )
             else:
-                assert char not in _sanitize_detail(char), f"Expected \\x{code:02x} to be stripped"
+                assert char not in _sanitize_detail(char), (
+                    f"Expected \\x{code:02x} to be stripped"
+                )
 
     def test_preserves_newline(self):
         result = _sanitize_detail("line1\nline2")
@@ -680,8 +688,15 @@ class TestSanitizeDetail:
     def test_strips_bidi_override_codepoints(self):
         """L1: bidi-override / isolate codepoints are stripped."""
         bidi = [
-            "‪", "‫", "‬", "‭", "‮",  # embeddings/overrides
-            "⁦", "⁧", "⁨", "⁩",            # isolates
+            "‪",
+            "‫",
+            "‬",
+            "‭",
+            "‮",  # embeddings/overrides
+            "⁦",
+            "⁧",
+            "⁨",
+            "⁩",  # isolates
         ]
         for cp in bidi:
             result = _sanitize_detail(f"safe{cp}text")
@@ -745,9 +760,7 @@ class TestSecurityHeaders:
 
     def test_headers_present_on_json_error_responses(self):
         """Middleware must cover non-200 paths too."""
-        response = client.post(
-            "/session/key", json={"api_key": "not-valid"}
-        )
+        response = client.post("/session/key", json={"api_key": "not-valid"})
         assert response.status_code == 400
         assert response.headers.get("x-content-type-options") == "nosniff"
         assert "content-security-policy" in response.headers
@@ -780,9 +793,7 @@ class TestRateLimiting:
         fresh = TestClient(app_module.app, raise_server_exceptions=False)
         cookies = _session_cookie()
         result = _make_valid_result(JAMIE_PARK)
-        with patch.object(
-            app_module, "extract_card_from_bytes", return_value=result
-        ):
+        with patch.object(app_module, "extract_card_from_bytes", return_value=result):
             for _ in range(limit):
                 resp = fresh.post(
                     "/process",
@@ -856,9 +867,7 @@ class TestRateLimiterUnit:
 class TestDownloadTokenBinding:
     def _mint_token(self, sess: TestClient) -> str:
         result = _make_valid_result(JAMIE_PARK)
-        with patch.object(
-            app_module, "extract_card_from_bytes", return_value=result
-        ):
+        with patch.object(app_module, "extract_card_from_bytes", return_value=result):
             resp = sess.post(
                 "/process",
                 files={"file": ("card.jpg", _TINY_JPEG, "image/jpeg")},
@@ -904,6 +913,7 @@ class TestDownloadTokenBinding:
     def test_thread_safety_basic(self):
         """Concurrent puts and gets should not raise."""
         import threading
+
         store = TokenStore(ttl_seconds=60)
         errors = []
 

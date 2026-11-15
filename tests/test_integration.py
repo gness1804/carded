@@ -130,9 +130,7 @@ def test_graham_bexar_co_jpeg_card_has_contact_info(api_key):
 
     assert isinstance(result, Valid)
     has_contact = bool(result.card.phones) or bool(result.card.emails)
-    assert has_contact, (
-        "Expected at least one phone or email on the Bexar County card"
-    )
+    assert has_contact, "Expected at least one phone or email on the Bexar County card"
 
 
 # ---------------------------------------------------------------------------
@@ -182,9 +180,7 @@ def test_heather_mccarver_heic_card_has_organization_or_contact(api_key):
 
     assert isinstance(result, Valid)
     has_org_or_contact = (
-        result.card.organization
-        or bool(result.card.phones)
-        or bool(result.card.emails)
+        result.card.organization or bool(result.card.phones) or bool(result.card.emails)
     )
     assert has_org_or_contact, (
         "Expected organization, phone, or email on the Heather McCarver card"
@@ -238,9 +234,7 @@ def test_marc_skinner_toyota_heic_card_has_organization_or_contact(api_key):
 
     assert isinstance(result, Valid)
     has_org_or_contact = (
-        result.card.organization
-        or bool(result.card.phones)
-        or bool(result.card.emails)
+        result.card.organization or bool(result.card.phones) or bool(result.card.emails)
     )
     assert has_org_or_contact, (
         "Expected organization, phone, or email on the Marc Skinner Toyota card"
