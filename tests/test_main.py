@@ -159,7 +159,7 @@ def test_extract_calls_baml_with_image_bytes():
 
     # BamlImagePy exposes data via as_base64() -> [base64_str, media_type].
     # The .base64 / .media_type attributes exist in repr but are not Python
-    # attributes on the Rust-backed BamlImagePy type in baml-py 0.218.0.
+    # attributes on the Rust-backed BamlImagePy type (verified in baml-py 0.226.3).
     b64_data, media_type = image_arg.as_base64()
     expected_b64 = base64.b64encode(TINY_JPEG).decode("ascii")
     assert b64_data == expected_b64

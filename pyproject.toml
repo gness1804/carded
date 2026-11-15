@@ -24,7 +24,7 @@ dependencies = [
     "jinja2>=3.1.4",
     # Phase 6 security: floors raised to clear known CVEs. See requirements.txt.
     "python-multipart>=0.0.27",
-    "baml-py>=0.218.0",
+    "baml-py>=0.226.3",
     "cryptography>=41.0.0",
     "pillow>=12.2.0",
     "pillow-heif>=0.16.0",
