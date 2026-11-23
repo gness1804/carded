@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Cloud-identifier scanner. CANONICAL SOURCE — copied into repos by /pre-commit
-and invoked by the cfs-guard shim. Keep SCANNER_VERSION in step with changes.
+Cloud-identifier scanner. CANONICAL SOURCE — copied into repos by /pre-commit.
+Keep SCANNER_VERSION in step with changes.
 
 WHY PYTHON, AFTER THREE BASH VERSIONS
 -------------------------------------
@@ -35,6 +35,17 @@ is all-decimal roughly 0.5% of the time, so excluding them would be a false
 negative for any account ID sitting in that position, while including them costs
 only an occasional blocked commit that `allow-identifier` clears. In a security
 control, the false negative is the expensive error.
+
+IP addresses (5.7.0) follow the same model: every syntactically valid IPv4 or
+IPv6 address is a candidate, with no context word required, and the exemption is
+structural — private, loopback, link-local, CGNAT, multicast, reserved and
+RFC 5737/3849 documentation ranges disclose nothing, nor do the big public DNS
+resolvers or an explicit short prefix (IPv4 /8 or IPv6 /32 and shorter) that
+names a block rather than a host. Any other address blocks. The fix is to write
+a documentation address, not to reach for the allow marker.
+
+Google Calendar group IDs and OAuth client IDs (5.7.0, merged from the
+~/scripts fork) are blocked unless their variable part is a template stand-in.
 
 WHAT --staged-diff SCANS, AND WHY IT IS THREE THINGS
 ----------------------------------------------------
@@ -78,6 +89,7 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import ipaddress
 import itertools
 import os
 import re
@@ -85,7 +97,7 @@ import subprocess
 import sys
 import unicodedata
 
-SCANNER_VERSION = "5.5.1"
+SCANNER_VERSION = "5.7.0"
 
 # AWS's own documentation example account IDs — never real.
 EXAMPLE_ACCOUNT_IDS = frozenset(
@@ -316,6 +328,61 @@ def _is_placeholder_bucket(name: str, dns_form: bool = False) -> bool:
 
 RE_PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
+
+# Google Calendar group IDs and OAuth client IDs. Neither is a credential, and
+# that is exactly why nothing here caught them before: like an AWS account ID,
+# they are durable PRIVATE IDENTIFIERS. A group-calendar address is a permanent
+# handle on a shared calendar — knowing it is most of what you need to request
+# access or to correlate a household — and an OAuth client ID names the Cloud
+# project behind an app. Added 2026-08-31 after a review found a personal repo
+# committing two group-calendar addresses and a client ID in a shared module.
+#
+# That first version lived ONLY in ~/scripts/.git/hooks/, still labelled 5.6.0,
+# and was found by the 5.7.0 sync's drift check — which would have overwritten
+# it. Merged into canonical in 5.7.0 so every install carries it.
+#
+# Deliberately NOT added: a general email-address rule. Real addresses appear
+# legitimately in commit trailers, package.json author fields, and docs, so it
+# would fire constantly and train the author to reach for --no-verify — which
+# costs more than it buys. These two shapes have no such benign use.
+RE_GOOGLE_CALENDAR_ID = re.compile(
+    r"([A-Za-z0-9._%+-]+)@group\.calendar\.google\.com", re.IGNORECASE
+)
+RE_GOOGLE_OAUTH_CLIENT = re.compile(
+    r"(\d{6,}-[A-Za-z0-9_-]{8,})\.apps\.googleusercontent\.com", re.IGNORECASE
+)
+
+
+def _is_placeholder_google_id(value: str) -> bool:
+    """
+    True if a Google identifier's distinguishing part is a stand-in.
+
+    The house convention pairs every gitignored config with a committed
+    `*.example.json`, so the template has to stay stageable under the very rule
+    it documents. Templates zero out the variable part — `family000...000`,
+    `000000000-xxxxxxxx` — so a long run of one repeated character at the end is
+    the signal. Eight is well past coincidence for a real ID and well short of
+    the run any template writes.
+    """
+    stripped = "".join(c for c in value if c.isalnum())
+    if not stripped:
+        return True
+
+    run = 1
+    for earlier, later in zip(stripped[-2::-1], stripped[::-1]):
+        if earlier.lower() != later.lower():
+            break
+        run += 1
+    if run >= 8:
+        return True
+
+    if RE_SHOUTING_PLACEHOLDER.match(value):
+        return True
+
+    lowered = value.lower()
+    return any(t in lowered for t in ("example", "placeholder", "redacted", "yourcalendar"))
+
+
 # A 12-digit run with no digit on either side. (?<!\d) / (?!\d) are what make
 # 11- and 13-digit numbers safe, and are precisely what ERE could not express.
 RE_TWELVE = re.compile(r"(?<!\d)(\d{12})(?!\d)")
@@ -363,6 +430,160 @@ RE_TWELVE_HYPHENATED = re.compile(
 def _separated_digits(match: re.Match[str]) -> str:
     """The 12 digits of a RE_TWELVE_HYPHENATED match, separators dropped."""
     return match.group(1) + match.group(3) + match.group(4)
+
+
+# --- IP addresses (5.7.0) ----------------------------------------------------
+#
+# A public IP is the same class of identifier as an account ID: not a secret,
+# but a durable handle on one specific piece of infrastructure — a home router,
+# an Elastic IP, a bastion. It was the last open finding of the 2026-08-14
+# review (H4).
+#
+# THE DESIGN IS AN ALLOWLIST OF NON-PUBLIC RANGES, NOT A CONTEXT WORD. The same
+# argument as the account-ID rule at the top of this file: a rule that needs
+# "ip" or "address" nearby misses the shapes IPs actually travel in — a
+# security-group CIDR, a curl URL, a log line, a hosts-file entry. Instead every
+# syntactically valid address is a candidate, and the exemption is structural:
+# the ranges below cannot route on the public internet, so writing one down
+# discloses nothing. That matters because the exam repo's CLAUDE.md explicitly
+# permits example IPs in teaching notes, and a 10.x VPC CIDR is in nearly every
+# AWS lab doc. A naive "any dotted quad" rule fires on both, and that is the
+# rule that teaches someone to reach for --no-verify.
+#
+# The list is written out rather than delegated to ipaddress's is_global /
+# is_private. Those properties have changed meaning across Python releases
+# (CPython reclassified several special-purpose ranges in 2024 patch releases),
+# and IPv4 multicast reports is_global True (verified on 3.13.5). Hooks run under
+# whatever python3 is first on PATH, so
+# a version-dependent exemption would make the same commit pass on one machine
+# and block on another. An explicit list behaves identically everywhere and can
+# be read in one screen.
+#
+# ACCEPTED RESIDUAL FALSE POSITIVE: a four-part version string whose parts are
+# all 0-255 and whose first part lands in public space is indistinguishable from
+# an address. Waive it with the allow-marker in file content; in a commit
+# message or a pathname (where the marker is ignored by design) reword or rename.
+# Examples are deliberately written in prose here: a literal one would make this
+# file unstageable under its own rule. Pinned in the test suite instead.
+#
+# KNOWN, ACCEPTED MISSES: EC2's dashed public hostnames (the address with its
+# dots turned to hyphens, inside a compute.amazonaws.com name) and IPs written
+# in decimal, hex or octal integer form. Neither is a dotted quad, and widening
+# the shape is how the hyphenated-account-ID rule went wrong twice.
+IPV4_EXEMPT_NETWORKS = tuple(
+    ipaddress.IPv4Network(cidr)
+    for cidr in (
+        "0.0.0.0/8",        # "this network" — and 0.0.0.0/0 in every SG doc
+        "10.0.0.0/8",       # RFC 1918
+        "172.16.0.0/12",    # RFC 1918
+        "192.168.0.0/16",   # RFC 1918
+        "100.64.0.0/10",    # RFC 6598 CGNAT shared space
+        "127.0.0.0/8",      # loopback
+        "169.254.0.0/16",   # link-local, including the instance metadata endpoint
+        "192.0.0.0/24",     # RFC 6890 IETF protocol assignments (reserved)
+        "192.0.2.0/24",     # RFC 5737 TEST-NET-1
+        "198.51.100.0/24",  # RFC 5737 TEST-NET-2
+        "203.0.113.0/24",   # RFC 5737 TEST-NET-3
+        "198.18.0.0/15",    # RFC 2544 benchmarking
+        "224.0.0.0/4",      # multicast
+        "240.0.0.0/4",      # reserved + limited broadcast; also every 255.x netmask
+    )
+)
+
+# IPv6 is scoped to GLOBAL UNICAST only, the one block that is actually
+# allocated to networks on the internet. Everything outside it — loopback,
+# link-local fe80::/10, ULA fc00::/7, multicast ff00::/8, the unspecified
+# address — is exempt by construction. 2001:db8::/32 is the RFC 3849
+# documentation prefix and is carved back out.
+IPV6_GLOBAL_UNICAST = ipaddress.IPv6Network("2000::/3")
+IPV6_EXEMPT_NETWORKS = (ipaddress.IPv6Network("2001:db8::/32"),)
+
+# The big public DNS resolvers, as EXACT addresses. They are global anycast
+# services, published by their operators and typed into every DNS runbook, so
+# naming one discloses nothing about whoever wrote it down. The 5.7.0 survey of
+# the ten installs found eight committed lines naming them — dig output, resolver
+# comparisons — and not one was an identifier. Exact addresses only: exempting
+# the operators' surrounding blocks would also exempt their customer space.
+PUBLIC_RESOLVERS = frozenset(
+    ipaddress.ip_address(a)
+    for a in (
+        "1.1.1.1", "1.0.0.1",                                 # Cloudflare
+        "8.8.8.8", "8.8.4.4",                                 # Google
+        "9.9.9.9", "149.112.112.112",                         # Quad9
+        "208.67.222.222", "208.67.220.220",                   # OpenDNS
+        "2606:4700:4700::1111", "2606:4700:4700::1001",       # Cloudflare
+        "2001:4860:4860::8888", "2001:4860:4860::8844",       # Google
+        "2620:fe::fe", "2620:fe::9",                          # Quad9
+        "2620:119:35::35", "2620:119:53::53",                 # OpenDNS
+    )
+)
+
+# An address written WITH a short prefix length names a block, not a host: a
+# /1 is half the internet, and a /32 of IPv6 is one ISP's whole allocation.
+# Teaching notes write them constantly (the two halves of 0.0.0.0/0, the global
+# unicast block itself), and the survey found six such lines in the exam repo —
+# plus this file's own definition of the global-unicast block above, which
+# blocked under the first cut of this rule. The cut-offs are where a block stops
+# being able to single out one organisation's infrastructure: an IPv4 /8 is a
+# sixteen-million-address legacy allocation, an IPv6 /32 a regional-registry
+# allocation to a provider. Anything longer still blocks.
+MAX_EXEMPT_PREFIX_V4 = 8
+MAX_EXEMPT_PREFIX_V6 = 32
+
+# One octet, 0-255, NO leading zero. A leading-zero form is not a valid address
+# to ipaddress (and is ambiguous octal to inet_aton), and excluding it keeps
+# zero-padded dates and serials out of the candidate set.
+_OCTET = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
+
+# Bounded so a dotted quad cannot be lifted out of a LONGER dotted run: no digit
+# or dot before it, and no digit or dot-digit after it. That keeps five-part
+# version strings and SNMP OIDs out entirely, and still lets an address end a
+# sentence with a full stop. Letters are deliberately NOT a boundary — an
+# escaped newline in a JSON string puts an 'n' directly before the address, and
+# excluding letters would miss every IP in a log line serialised that way.
+RE_IPV4 = re.compile(
+    rf"(?<![0-9.])({_OCTET}(?:\.{_OCTET}){{3}})(?![0-9]|\.[0-9])"
+    r"(?:/([0-9]{1,3})(?![0-9]))?"
+)
+
+# A CANDIDATE only; ipaddress decides validity. The first group must be four hex
+# digits starting 2 or 3, because that is exactly what 2000::/3 requires — so
+# times (23:59:59), MAC addresses and short hex slices are never even tried.
+# Bounded by hex/colon on both sides so it cannot start or stop mid-token.
+RE_IPV6_CANDIDATE = re.compile(
+    r"(?<![0-9A-Za-z:])([23][0-9A-Fa-f]{3}(?::[0-9A-Fa-f]{0,4}){2,7})(?![0-9A-Za-z:])"
+    r"(?:/([0-9]{1,3})(?![0-9]))?"
+)
+
+
+def _short_prefix(match: re.Match[str], limit: int) -> bool:
+    """True if the match carries an explicit prefix length of `limit` or shorter."""
+    prefix = match.group(2)
+    return prefix is not None and int(prefix) <= limit
+
+
+def _is_public_ipv4(match: re.Match[str]) -> bool:
+    """True if this RE_IPV4 match is a host address outside every exempt range."""
+    try:
+        address = ipaddress.IPv4Address(match.group(1))
+    except ValueError:
+        return False
+    if address in PUBLIC_RESOLVERS or _short_prefix(match, MAX_EXEMPT_PREFIX_V4):
+        return False
+    return not any(address in network for network in IPV4_EXEMPT_NETWORKS)
+
+
+def _is_public_ipv6(match: re.Match[str]) -> bool:
+    """True if this candidate parses as a global-unicast, non-documentation IPv6."""
+    try:
+        address = ipaddress.IPv6Address(match.group(1))
+    except ValueError:
+        return False
+    if address not in IPV6_GLOBAL_UNICAST:
+        return False
+    if address in PUBLIC_RESOLVERS or _short_prefix(match, MAX_EXEMPT_PREFIX_V6):
+        return False
+    return not any(address in network for network in IPV6_EXEMPT_NETWORKS)
 
 # S3 ARNs are redacted as a unit: the bucket NAME is the sensitive part, and
 # masking only the arn: prefix would leave it printed in full. The name is
@@ -538,10 +759,16 @@ def split_lines(text: str) -> list[str]:
 
 def _url_decoded(text: str) -> str:
     """
-    Cheap, dependency-free percent-decode of the delimiters that matter for ARNs.
-    Full unquote() would also decode %25 chains; this only needs ':' and '/'.
+    Cheap, dependency-free percent-decode of the delimiters that matter here.
+
+    Full unquote() would also decode %25 chains; only the separators that appear
+    inside an identifier are needed. '@' was added with the Google rules: a
+    calendar ID reaches a file percent-encoded precisely when someone pastes a
+    Google API error, whose request URI carries the calendar ID in the query
+    string — the single most likely way one gets committed by accident.
     """
-    for enc, dec in (("%3A", ":"), ("%3a", ":"), ("%2F", "/"), ("%2f", "/")):
+    for enc, dec in (("%3A", ":"), ("%3a", ":"), ("%2F", "/"), ("%2f", "/"),
+                     ("%40", "@")):
         text = text.replace(enc, dec)
     return text
 
@@ -652,6 +879,17 @@ def scan_line(line: str, honor_allow_marker: bool = True) -> str | None:
                 if not _is_placeholder_bucket(segment, dns_form=dns_form):
                     return rule
 
+    # Same per-match filtering: a zeroed template ID on the line must not
+    # suppress a real one beside it.
+    for subject in subjects:
+        for match in RE_GOOGLE_CALENDAR_ID.finditer(subject):
+            if not _is_placeholder_google_id(match.group(1)):
+                return "google-calendar-id"
+
+        for match in RE_GOOGLE_OAUTH_CLIENT.finditer(subject):
+            if not _is_placeholder_google_id(match.group(1)):
+                return "google-oauth-client-id"
+
     # Filter PER MATCH. A documentation example ID on the line must not suppress
     # a real ID elsewhere on that same line — the bug that killed version 3.
     #
@@ -666,6 +904,18 @@ def scan_line(line: str, honor_allow_marker: bool = True) -> str | None:
         for match in RE_TWELVE_HYPHENATED.finditer(subject):
             if not _is_example_account_id(_separated_digits(match)):
                 return "account-id"
+
+    # Last, so an account ID on the same line is the reported reason. Per match
+    # like every rule above: a 10.x CIDR on the line must not launder a public
+    # address beside it.
+    for subject in subjects:
+        for match in RE_IPV4.finditer(subject):
+            if _is_public_ipv4(match):
+                return "ipv4-address"
+
+        for match in RE_IPV6_CANDIDATE.finditer(subject):
+            if _is_public_ipv6(match):
+                return "ipv6-address"
 
     return None
 
@@ -778,7 +1028,19 @@ def _mask(text: str) -> str:
         end = match.end(1) - match.start(0)
         return whole[:start] + "<redacted-bucket>" + whole[end:]
 
+    def _google(match: re.Match[str], label: str) -> str:
+        # Spliced by span for the same reason as _vhost: str.replace would
+        # rewrite the first occurrence anywhere in the match.
+        if _is_placeholder_google_id(match.group(1)):
+            return match.group(0)
+        whole = match.group(0)
+        start = match.start(1) - match.start(0)
+        end = match.end(1) - match.start(0)
+        return whole[:start] + label + whole[end:]
+
     text = RE_PEM.sub("<redacted-key-header>", text)
+    text = RE_GOOGLE_CALENDAR_ID.sub(lambda m: _google(m, "<redacted-calendar-id>"), text)
+    text = RE_GOOGLE_OAUTH_CLIENT.sub(lambda m: _google(m, "<redacted-oauth-client-id>"), text)
     text = RE_ARN_S3_BUCKET.sub(_bucket, text)
     # Same three forms scan_line now blocks on, redacted with the same filter.
     text = RE_S3_VHOST.sub(_vhost, text)
@@ -787,6 +1049,17 @@ def _mask(text: str) -> str:
     text = RE_AWS_UNIQUE_ID.sub("<redacted-key-id>", text)
     text = RE_TWELVE.sub(_twelve, text)
     text = RE_TWELVE_HYPHENATED.sub(_hyphenated, text)
+    # Same exemption test scan_line uses, so a path holding only a 10.x CIDR is
+    # not masked in a message about a finding this scanner never raised. Only
+    # the address is replaced; a prefix length after it survives.
+    def _ip(match: re.Match[str], public) -> str:
+        if not public(match):
+            return match.group(0)
+        whole = match.group(0)
+        return "<redacted-ip>" + whole[match.end(1) - match.start(0):]
+
+    text = RE_IPV4.sub(lambda m: _ip(m, _is_public_ipv4), text)
+    text = RE_IPV6_CANDIDATE.sub(lambda m: _ip(m, _is_public_ipv6), text)
     return text
 
 
@@ -1501,8 +1774,8 @@ def iter_file_lines(paths, unscannable: list[str]):
 
     FAILS CLOSED, like every other mode. This used to swallow OSError and move
     on, so a missing path, an unreadable path and a directory each scanned as
-    rc 0 — and this is the mode the cfs-guard shim uses on CFS documents, the
-    2026-07-18 sink. The staged-diff path had already been hardened to exit
+    rc 0 — and this is the mode that scans whole files on demand (--files),
+    rather than staged diffs. The staged-diff path had already been hardened to exit
     rather than proceed unscanned; the two modes disagreed about the same
     question, which is exactly the contradiction that produced the original bug.
     """
@@ -1582,9 +1855,11 @@ def _report_hits(hits, allow_marker_usable: bool = True) -> None:
     print("  Use a placeholder such as <AWS_ACCOUNT_ID> and resolve at runtime:", file=e)
     print("    aws sts get-caller-identity --query Account --output text", file=e)
     print("", file=e)
-    print("  CFS docs sync into GitHub issues, which are exactly as public as the", file=e)
-    print("  repo. Check with: gh repo view --json visibility", file=e)
-    print("", file=e)
+    if any(rule.startswith("ip") for _, rule in hits):
+        print("  For an IP, use a documentation address instead: 192.0.2.0/24,", file=e)
+        print("  198.51.100.0/24, 203.0.113.0/24, or 2001:db8::/32. A four-part", file=e)
+        print("  version string that looks like an address is a known false positive.", file=e)
+        print("", file=e)
     if allow_marker_usable:
         print("  If a line is genuinely fine — a real UUID whose tail is 12 digits, or a", file=e)
         print(f"  non-AWS 12-digit number — append '{ALLOW_MARKER}' to that line.", file=e)
